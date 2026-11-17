@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "revision": "11cd98842874cc1b87ac274bd2d5cceb38102bb2",
+  "archive_url": "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/11cd98842874cc1b87ac274bd2d5cceb38102bb2",
+  "archive_sha256": "b60a0a2f35d9df215dc0e06ff31ea2bf3f863bb4d74b6675e91bf7e0f4e199b8",
+  "build_image": "nvcr.io/nvidia/vllm@sha256:4b16878dc624fc3dcef3d9cf13564c148b602698219c846f275012d49cdb3b56",
+  "cmake_flags": [
+    "-DCMAKE_BUILD_TYPE=Release", "-DGGML_CUDA=ON",
+    "-DCMAKE_CUDA_ARCHITECTURES=120", "-DGGML_NATIVE=OFF",
+    "-DLLAMA_CURL=OFF", "-DLLAMA_BUILD_UI=OFF", "-DLLAMA_BUILD_TESTS=OFF"
+  ],
+  "model": {
+    "id": "Qwen3.8-27B-Q4_K_M",
+    "repository": "lmstudio-community/Qwen3.8-27B-GGUF",
+    "revision": "5a7da681f60570ab5b439a587e912d2e5eddb582",
+    "file": "Qwen3.8-27B-Q4_K_M.gguf",
+    "bytes": 16810714336,
+    "sha256": "e00082f779fa385cee8c68a3ec8833a75778cc87272240b942f74e0b8243e520",
+    "architecture": "qwen35",
+    "quantization": "Q4_K_M"
+  }
+}

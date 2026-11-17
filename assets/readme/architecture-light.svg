@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="340" viewBox="0 0 1000 340"
+     role="img" aria-labelledby="title description">
+  <title id="title">KVHarbor serving architecture</title>
+  <desc id="description">An HTTP ingress routes generation, transcription, and synthesis through separate queues and workers. The workers return SSE text deltas, a JSON transcript, or PCM16 audio chunks.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" markerWidth="9" markerHeight="9"
+            refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#6E879D" stroke-width="1.75"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <g fill="#F0F4F8" stroke="#DCE6EF" stroke-width="1.5">
+    <rect x="223" y="18" width="212" height="304" rx="28"/>
+    <rect x="472" y="18" width="264" height="304" rx="28"/>
+    <rect x="774" y="18" width="204" height="304" rx="28"/>
+  </g>
+
+  <g fill="none" stroke="#6E879D" stroke-width="1.8" stroke-linecap="round"
+     stroke-linejoin="round" marker-end="url(#arrow)">
+    <path d="M178 189 C207 189 199 107 237 107"/>
+    <path d="M178 189 H237"/>
+    <path d="M178 189 C207 189 199 271 237 271"/>
+    <path d="M415 107 H486"/>
+    <path d="M415 189 H486"/>
+    <path d="M415 271 H486"/>
+    <path d="M716 107 H787"/>
+    <path d="M716 189 H787"/>
+    <path d="M716 271 H787"/>
+  </g>
+
+  <g fill="#FCFDFF" stroke="#BDCADA" stroke-width="1.5">
+    <rect x="22" y="154" width="156" height="70" rx="22"/>
+    <g id="queues">
+      <rect x="243" y="77" width="172" height="60" rx="20"/>
+      <rect x="243" y="159" width="172" height="60" rx="20"/>
+      <rect x="243" y="241" width="172" height="60" rx="20"/>
+    </g>
+    <g id="workers">
+      <rect x="492" y="77" width="224" height="60" rx="20"/>
+      <rect x="492" y="159" width="224" height="60" rx="20"/>
+      <rect x="492" y="241" width="224" height="60" rx="20"/>
+    </g>
+    <g id="responses">
+      <rect x="793" y="77" width="166" height="60" rx="20"/>
+      <rect x="793" y="159" width="166" height="60" rx="20"/>
+      <rect x="793" y="241" width="166" height="60" rx="20"/>
+    </g>
+  </g>
+
+  <g font-family="Inter, 'Segoe UI', 'DejaVu Sans', sans-serif" text-anchor="middle">
+    <g fill="#475E73" font-size="17" font-weight="600">
+      <text x="329" y="53">Task queues</text>
+      <text x="604" y="53">Native workers</text>
+      <text x="876" y="53">Responses</text>
+    </g>
+    <g fill="#17283A" font-size="19" font-weight="600">
+      <text x="100" y="185">HTTP ingress</text>
+      <text x="329" y="113">Generation</text>
+      <text x="329" y="195">Transcription</text>
+      <text x="329" y="277">Synthesis</text>
+      <text x="604" y="104">Qwen3.8-27B</text>
+      <text x="604" y="186">Qwen3-ASR</text>
+      <text x="604" y="268">Kokoro</text>
+      <text x="876" y="104">SSE</text>
+      <text x="876" y="186">JSON</text>
+      <text x="876" y="268">PCM16</text>
+    </g>
+    <g fill="#475E73" font-size="15">
+      <text x="100" y="206">Asio / Beast</text>
+      <text x="604" y="124">llama.cpp · GPU</text>
+      <text x="604" y="206">sherpa-onnx · CPU</text>
+      <text x="604" y="288">sherpa-onnx · CPU</text>
+      <text x="876" y="124">text deltas</text>
+      <text x="876" y="206">transcript</text>
+      <text x="876" y="288">audio chunks</text>
+    </g>
+  </g>
+</svg>

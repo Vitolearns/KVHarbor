@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "sdk": {
+    "version": "v2.0.1",
+    "file": "sherpa-v2.0.1.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-x64-shared-lib.tar.bz2",
+    "bytes": 9710131,
+    "sha256": "532c45bbd41036d83cd70606797529aa8086c2053395a58967736c727625b120",
+    "header_api": "https://api.github.com/repos/k2-fsa/sherpa-onnx/contents/sherpa-onnx/c-api/c-api.h?ref=v2.0.1",
+    "header_sha256": "5698f38ba09ad2bdf085c56a6cbbd7741acf15e25f4ce5c7097b9702cadf437f"
+  },
+  "asr": {
+    "id": "Qwen3-ASR-0.6B-int8",
+    "file": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+    "asset_api": "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/390698077",
+    "bytes": 878702423,
+    "sha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+    "destination": "models/audio/qwen3-asr-0.6b-int8",
+    "scope": "offline speech recognition"
+  },
+  "tts": {
+    "id": "Kokoro-v1.0-zh-en",
+    "file": "kokoro-multi-lang-v1_0.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
+    "bytes": 349886476,
+    "sha256": "60703707bc05ccd48d60e1eb723f38b07d6e474795a0b6a588d7220400e0f7a4",
+    "destination": "models/audio/kokoro-v1.0",
+    "scope": "offline synthesis with callback PCM delivery"
+  }
+}

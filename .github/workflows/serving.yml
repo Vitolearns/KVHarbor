@@ -1,0 +1,18 @@
+name: C++ serving checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  cpu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libboost-dev nlohmann-json3-dev
+      - run: cmake -S serving -B build-serving-cpu -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-serving-cpu --parallel 2
+      - run: ctest --test-dir build-serving-cpu --output-on-failure
+      - run: python3 serving/tests/test_http.py build-serving-cpu/kvharbor-server
+      - run: python3 tests/test_stream_bench.py
+      - run: python3 tests/test_capacity_bench.py

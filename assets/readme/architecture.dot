@@ -1,0 +1,50 @@
+digraph architecture {
+  // The light and dark SVGs render this topology with fixed positions.
+  graph [rankdir=LR, splines=spline, bgcolor="transparent", nodesep=0.32,
+         ranksep=0.42, pad=0.20, fontname="Helvetica", fontsize=14];
+  node [height=0.72, shape=box, style="rounded,filled", fontname="Helvetica",
+        fontsize=14, margin="0.16,0.10", color="#BDCADA", fillcolor="#FCFDFF",
+        fontcolor="#17283A", penwidth=1.1];
+  edge [arrowhead=vee, arrowsize=0.61, color="#6E879D", penwidth=1.2];
+
+  http [label="HTTP ingress\nAsio / Beast"];
+  subgraph cluster_queues {
+    label="Task queues";
+    style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
+    { rank=same;
+      llm_q [label="Generation", group="text"];
+      asr_q [label="Transcription", group="asr"];
+      tts_q [label="Synthesis", group="tts"];
+    }
+    tts_q -> asr_q -> llm_q [style=invis, weight=16];
+  }
+  subgraph cluster_workers {
+    label="Native workers";
+    style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
+    { rank=same;
+      llm [label="Qwen3.8-27B\nllama.cpp · GPU", group="text"];
+      asr [label="Qwen3-ASR\nsherpa-onnx · CPU", group="asr"];
+      tts [label="Kokoro\nsherpa-onnx · CPU", group="tts"];
+    }
+    tts -> asr -> llm [style=invis, weight=16];
+  }
+  subgraph cluster_responses {
+    label="Responses";
+    style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
+    { rank=same;
+      sse [label="SSE\ntext deltas", group="text"];
+      transcript [label="JSON\ntranscript", group="asr"];
+      pcm [label="PCM16\naudio chunks", group="tts"];
+    }
+    pcm -> transcript -> sse [style=invis, weight=16];
+  }
+  http:e -> llm_q:w;
+  http:e -> asr_q:w;
+  http:e -> tts_q:w;
+  llm_q:e -> llm:w;
+  asr_q:e -> asr:w;
+  tts_q:e -> tts:w;
+  llm:e -> sse:w;
+  asr:e -> transcript:w;
+  tts:e -> pcm:w;
+}

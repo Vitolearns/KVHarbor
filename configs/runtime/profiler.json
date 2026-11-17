@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "version": "2026.6.1.218-266139266636v0",
+  "file": "NsightSystems-linux-cli-public-2026.6.1.218-39266636.deb",
+  "url": "https://developer.download.nvidia.com/devtools/repos/ubuntu2404/amd64/NsightSystems-linux-cli-public-2026.6.1.218-39266636.deb",
+  "bytes": 232877734,
+  "sha256": "e71440978244e3883fc769da91a44a03451129ce21988d0db656a6bf7c1cb56b",
+  "install_directory": ".cache/kvharbor/profiler/nsys-2026.6.1",
+  "binary": "opt/nvidia/nsight-systems-cli/2026.6.1/target-linux-x64/nsys",
+  "source_index": "https://developer.download.nvidia.com/devtools/repos/ubuntu2404/amd64/Packages"
+}

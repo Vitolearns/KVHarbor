@@ -1,0 +1,6 @@
+{"id":"long-inflight","group":"long","deadline_ms":15000,"body":{"messages":[{"role":"user","content":"List all the integers from 1 to 400 separated by commas. Give no other text."}],"max_tokens":96}}
+{"id":"long-queued-1","group":"long","deadline_ms":15000,"body":{"messages":[{"role":"user","content":"List the positive odd integers from 1 to 799 separated by commas. Give no other text."}],"max_tokens":96}}
+{"id":"short-1","group":"short","deadline_ms":4000,"body":{"messages":[{"role":"user","content":"List the numbers 1 to 20 separated by commas. Give no other text."}],"max_tokens":8}}
+{"id":"short-2","group":"short","deadline_ms":4000,"body":{"messages":[{"role":"user","content":"List the numbers 20 to 40 separated by commas. Give no other text."}],"max_tokens":8}}
+{"id":"long-queued-2","group":"long","deadline_ms":15000,"body":{"messages":[{"role":"user","content":"List the first 400 positive even integers separated by commas. Give no other text."}],"max_tokens":96}}
+{"id":"short-3","group":"short","deadline_ms":4000,"body":{"messages":[{"role":"user","content":"List the numbers 40 to 60 separated by commas. Give no other text."}],"max_tokens":8}}

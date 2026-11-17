@@ -1,0 +1,15 @@
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -10034,6 +10034,12 @@
+         }
+     }
+ 
++    // KVHarbor PERF-003: the Qwen FFN shape and a smaller case with a K-loop tail.
++    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 17408, 5120,
++                                                       false, 1, 1, false, false, true, false, {1, 1}));
++    test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 1, 257, 2304,
++                                                       false, 1, 1, false, false, true, false, {1, 1}));
++
+     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
+         for (bool with_norm : {false, true}) {
+             for (bool bias_probs : {false, true}) {
