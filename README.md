@@ -1,6 +1,6 @@
 <h1 align="center">KVHarbor</h1>
 
-<p align="center"><strong>Single-GPU inference serving for text and speech</strong></p>
+<p align="center"><strong>Single-GPU LLM serving in C++20</strong></p>
 
 <p align="center">
   <a href="https://github.com/Vitolearns/KVHarbor/actions/workflows/serving.yml"><img src="https://github.com/Vitolearns/KVHarbor/actions/workflows/serving.yml/badge.svg?branch=main" alt="C++ serving CI"></a>
@@ -12,10 +12,17 @@
   <a href="#quick-start">Quick start</a> · <a href="#run-real-models">Run real models</a> · <a href="#architecture">Architecture</a> · <a href="#benchmarks">Benchmarks</a> · <a href="README.zh-CN.md" lang="zh-CN">简体中文</a>
 </p>
 
-KVHarbor is a C++20 HTTP server for a single NVIDIA GPU. It runs text generation
-through llama.cpp on CUDA and uses sherpa-onnx for speech recognition and
-synthesis on CPU. The server manages admission, deadlines, cancellation and
-streaming backpressure all the way to worker release.
+KVHarbor serves text over HTTP/SSE and handles request admission, deadlines,
+cancellation, streaming backpressure, and worker release. llama.cpp runs
+inference on one NVIDIA GPU. Optional speech recognition and synthesis use
+sherpa-onnx on the CPU.
+
+- **27B serving under load.** Measured 1,152 arrivals at three rates using
+  Qwen3.8-27B Q4_K_M on one RTX 5090 Laptop GPU. Separate tests covered overload
+  rejection and recovery. [Load-test report](docs/experiments/serving-acceptance.md)
+- **CUDA workspace.** On the same model and GPU, reserving one logits row saved
+  383 MiB of CUDA compute workspace. Median HTTP completion took about 5 ms
+  longer. [GPU experiment](docs/experiments/perf-003-gpu.md)
 
 ## Quick start
 
@@ -40,30 +47,38 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true,"max_tokens":4}'
 ```
 
-Expect four placeholder chunks and a final `data: [DONE]`. Stop the server with
-Ctrl+C. To run CUDA text generation or speech models, follow the
-[real-model guide](#run-real-models).
+Expect four content chunks, a final JSON chunk with `finish_reason: "stop"`
+and token usage, then `data: [DONE]`. Stop the server with Ctrl+C. For CUDA
+text generation and speech models, see [Run real models](#run-real-models).
 
 ## Run real models
 
-The reference setup is Ubuntu 24.04 (native or WSL2) with an RTX 5090 Laptop GPU
-and CUDA target SM120. On the host, use Bash, Git, curl, Python 3.12+, Docker
-with NVIDIA GPU access, and the `libboost-dev` and `nlohmann-json3-dev`
-packages. Run the commands from the repository root.
+The reference setup is Ubuntu 24.04 (native or WSL2) with an RTX 5090 Laptop
+GPU. The pinned CUDA build targets SM120. Other GPU architectures require a
+compatible build configuration.
+
+On the host, use Bash, Git, curl, Python 3.12+, Docker with NVIDIA GPU access,
+and the `libboost-dev` and `nlohmann-json3-dev` packages. Run the commands from
+the repository root.
 
 ### CUDA text generation
 
 <details>
 <summary>Build, start the server, and send a request</summary>
 
-The [text runtime lock](configs/runtime/llama.json) lists the weight source and
-SHA-256, the llama.cpp revision and the CUDA image. Download the GGUF to
-`models/` and compare the checksum against the lock before building.
+Create `models/` and save the [locked GGUF](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf) there.
+The [text runtime lock](configs/runtime/llama.json) specifies the model
+checksum, llama.cpp revision, and CUDA image.
 
 ```bash
 export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
-sha256sum "$GGUF_MODEL"
+model_sha256=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["model"]["sha256"])')
+printf '%s  %s\n' "$model_sha256" "$GGUF_MODEL" | sha256sum --check -
+```
 
+After the checksum passes, build the runtime and the server.
+
+```bash
 image=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["build_image"])')
 docker pull "$image"
 python3 scripts/llama_runtime.py build --jobs 4

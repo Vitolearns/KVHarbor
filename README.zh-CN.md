@@ -1,6 +1,6 @@
 <h1 align="center">KVHarbor</h1>
 
-<p align="center"><strong>面向单卡的 C++ 文本与语音推理服务</strong></p>
+<p align="center"><strong>单卡 C++20 LLM 推理服务</strong></p>
 
 <p align="center">
   <a href="https://github.com/Vitolearns/KVHarbor/actions/workflows/serving.yml"><img src="https://github.com/Vitolearns/KVHarbor/actions/workflows/serving.yml/badge.svg?branch=main" alt="C++ serving CI"></a>
@@ -12,9 +12,15 @@
   <a href="#快速开始">快速开始</a> · <a href="#运行真实模型">运行真实模型</a> · <a href="#架构">架构</a> · <a href="#单卡实测">单卡实测</a> · <a href="README.md" lang="en">English</a>
 </p>
 
-KVHarbor 是面向单张 NVIDIA GPU 的 C++20 HTTP 推理服务。文本生成由
-llama.cpp 在 CUDA 上执行，语音识别和合成由 sherpa-onnx 在 CPU 上执行。
-从请求进入队列到 worker 归还，服务层负责准入、截止时间、取消和流式背压。
+KVHarbor 提供 HTTP/SSE 文本生成服务，负责请求准入、截止时间、取消、
+流式背压和 worker 回收。llama.cpp 在单张 NVIDIA GPU 上执行文本生成。
+可选语音接口使用 sherpa-onnx 在 CPU 上运行识别和合成。
+
+- **27B 服务压测。** 在一张 RTX 5090 Laptop GPU 上，用 Qwen3.8-27B Q4_K_M
+  测试三档到达率，共记录 1,152 次请求到达，另做了过载拒绝与恢复测试。
+  [压测报告](docs/experiments/serving-acceptance.md)
+- **CUDA 计算工作区。** 同一模型和 GPU 上，单行 logits 预留节省 383 MiB，
+  HTTP 完成时间中位数增加约 5 毫秒。[GPU 实验](docs/experiments/perf-003-gpu.md)
 
 ## 快速开始
 
@@ -39,28 +45,35 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true,"max_tokens":4}'
 ```
 
-请求会返回 4 个占位数据块，并以 `data: [DONE]` 结束。用 Ctrl+C 停止服务。
-需要实际生成文本、转写或合成语音时，参见[真实模型运行指南](#运行真实模型)。
+请求会返回 4 个内容块、1 条包含 `finish_reason: "stop"` 和 token 用量的
+JSON 记录，最后发送 `data: [DONE]`。用 Ctrl+C 停止服务。需要实际生成文本、
+转写或合成语音时，参见[真实模型运行指南](#运行真实模型)。
 
 ## 运行真实模型
 
-参考环境为 Ubuntu 24.04（原生 Linux 或 WSL2）、RTX 5090 Laptop GPU，
-CUDA 编译目标为 SM120。主机需要 Bash、Git、curl、Python 3.12+、可访问
-NVIDIA GPU 的 Docker，以及 `libboost-dev` 和 `nlohmann-json3-dev`。
-以下命令在仓库根目录执行。
+参考环境为 Ubuntu 24.04（原生 Linux 或 WSL2）和 RTX 5090 Laptop GPU。
+锁定的 CUDA 构建目标为 SM120。其他 GPU 架构需要使用相应的构建配置。
+
+主机需要 Bash、Git、curl、Python 3.12+、可访问 NVIDIA GPU 的 Docker，
+以及 `libboost-dev` 和 `nlohmann-json3-dev`。以下命令在仓库根目录执行。
 
 ### CUDA 文本生成
 
 <details>
 <summary>构建、启动服务并发送请求</summary>
 
-[文本运行时清单](configs/runtime/llama.json)记录了权重来源、SHA-256、
-llama.cpp 版本和 CUDA 镜像。将 GGUF 下载到 `models/`，核对校验和后构建。
+创建 `models/` 目录并将[锁定版本的 GGUF](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf)保存到其中。
+[文本运行时清单](configs/runtime/llama.json)记录了模型校验和、llama.cpp 版本和 CUDA 镜像。
 
 ```bash
 export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
-sha256sum "$GGUF_MODEL"
+model_sha256=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["model"]["sha256"])')
+printf '%s  %s\n' "$model_sha256" "$GGUF_MODEL" | sha256sum --check -
+```
 
+校验通过后，构建运行时和服务。
+
+```bash
 image=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["build_image"])')
 docker pull "$image"
 python3 scripts/llama_runtime.py build --jobs 4
