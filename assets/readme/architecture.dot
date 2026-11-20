@@ -1,50 +1,62 @@
 digraph architecture {
-  // The light and dark SVGs render this topology with fixed positions.
+  // The light and dark SVGs render these same lanes with fixed positions.
   graph [rankdir=LR, splines=spline, bgcolor="transparent", nodesep=0.32,
          ranksep=0.42, pad=0.20, fontname="Helvetica", fontsize=14];
   node [height=0.72, shape=box, style="rounded,filled", fontname="Helvetica",
         fontsize=14, margin="0.16,0.10", color="#BDCADA", fillcolor="#FCFDFF",
         fontcolor="#17283A", penwidth=1.1];
   edge [arrowhead=vee, arrowsize=0.61, color="#6E879D", penwidth=1.2];
-
   http [label="HTTP ingress\nAsio / Beast"];
-  subgraph cluster_queues {
+  subgraph cluster_queue {
     label="Task queues";
     style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
     { rank=same;
-      llm_q [label="Generation", group="text"];
-      asr_q [label="Transcription", group="asr"];
-      tts_q [label="Synthesis", group="tts"];
+      text_queue [label="Generation", group="text"];
+      asr_queue [label="Transcription", group="asr"];
+      tts_queue [label="Synthesis", group="tts"];
     }
-    tts_q -> asr_q -> llm_q [style=invis, weight=16];
+    tts_queue -> asr_queue -> text_queue [style=invis, weight=16];
   }
-  subgraph cluster_workers {
-    label="Native workers";
+  subgraph cluster_adapter {
+    label="Runtime adapters";
     style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
     { rank=same;
-      llm [label="Qwen3.8-27B\nllama.cpp · GPU", group="text"];
-      asr [label="Qwen3-ASR\nsherpa-onnx · CPU", group="asr"];
-      tts [label="Kokoro\nsherpa-onnx · CPU", group="tts"];
+      text_adapter [label="Text\ntyped request", group="text"];
+      asr_adapter [label="ASR\nWAV input", group="asr"];
+      tts_adapter [label="TTS\ntext and voice", group="tts"];
     }
-    tts -> asr -> llm [style=invis, weight=16];
+    tts_adapter -> asr_adapter -> text_adapter [style=invis, weight=16];
   }
-  subgraph cluster_responses {
+  subgraph cluster_engine {
+    label="Engines";
+    style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
+    { rank=same;
+      text_engine [label="llama.cpp\nTensorRT Edge-LLM\nGPU · select one", group="text"];
+      asr_engine [label="sherpa-onnx\nQwen3-ASR · CPU", group="asr"];
+      tts_engine [label="sherpa-onnx\nKokoro · CPU", group="tts"];
+    }
+    tts_engine -> asr_engine -> text_engine [style=invis, weight=16];
+  }
+  subgraph cluster_response {
     label="Responses";
     style="rounded,filled"; color="#DCE6EF"; fillcolor="#F0F4F8"; margin=14;
     { rank=same;
-      sse [label="SSE\ntext deltas", group="text"];
-      transcript [label="JSON\ntranscript", group="asr"];
-      pcm [label="PCM16\naudio chunks", group="tts"];
+      text_response [label="SSE\ntext deltas", group="text"];
+      asr_response [label="JSON\ntranscript", group="asr"];
+      tts_response [label="PCM16\naudio chunks", group="tts"];
     }
-    pcm -> transcript -> sse [style=invis, weight=16];
+    tts_response -> asr_response -> text_response [style=invis, weight=16];
   }
-  http:e -> llm_q:w;
-  http:e -> asr_q:w;
-  http:e -> tts_q:w;
-  llm_q:e -> llm:w;
-  asr_q:e -> asr:w;
-  tts_q:e -> tts:w;
-  llm:e -> sse:w;
-  asr:e -> transcript:w;
-  tts:e -> pcm:w;
+  http:e -> text_queue:w;
+  text_queue:e -> text_adapter:w;
+  text_adapter:e -> text_engine:w;
+  text_engine:e -> text_response:w;
+  http:e -> asr_queue:w;
+  asr_queue:e -> asr_adapter:w;
+  asr_adapter:e -> asr_engine:w;
+  asr_engine:e -> asr_response:w;
+  http:e -> tts_queue:w;
+  tts_queue:e -> tts_adapter:w;
+  tts_adapter:e -> tts_engine:w;
+  tts_engine:e -> tts_response:w;
 }
