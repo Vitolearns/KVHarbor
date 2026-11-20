@@ -20,6 +20,13 @@
 #endif
 
 namespace kvharbor::serving {
+std::optional<TextBackend> ParseTextBackend(std::string_view value) {
+  if (value == "llama.cpp") return TextBackend::kLlama;
+  if (value == "tensorrt-edge-llm") return TextBackend::kEdgeLlm;
+  if (value == "none") return TextBackend::kNone;
+  return std::nullopt;
+}
+
 const char* Name(Task task) {
   switch (task) {
     case Task::kLlm:
@@ -118,6 +125,70 @@ const std::string* StringField(const Json& body, const char* name) {
   return field == nullptr ? nullptr : field->get_ptr<const std::string*>();
 }
 
+ValueOrFailure<TextInput> ParseTextInput(const Json& body,
+                                         const RuntimeConfig& config) {
+  const auto tokens = IntegerFieldOr(body, "max_tokens", 64);
+  const auto temperature = NumberFieldOr(body, "temperature", 0.0);
+  if (!body.is_object() || !tokens || !temperature)
+    return InvalidRequest("invalid request fields");
+  if (*tokens < 1 || *tokens >= config.context || *temperature != 0.0)
+    return InvalidRequest(
+        "native adapter requires temperature=0 and a bounded max_tokens");
+  if (body.contains("model")) {
+    const auto* model = StringField(body, "model");
+    if (!model) return InvalidRequest("invalid request fields");
+    if (*model != config.model_id)
+      return InvalidRequest("requested model is not loaded");
+  }
+  TextInput input{*tokens, !body.contains("prompt"), {}};
+  if (!input.apply_chat_template) {
+    const auto* prompt = StringField(body, "prompt");
+    if (!prompt || prompt->empty() || prompt->size() > 1024 * 1024)
+      return InvalidRequest("prompt or output budget is invalid");
+    input.messages.push_back({"user", *prompt});
+    return input;
+  }
+  const auto* messages = FindField(body, "messages");
+  if (!messages || !messages->is_array() || messages->empty() ||
+      messages->size() > 64)
+    return InvalidRequest("messages must contain 1 to 64 text messages");
+  for (const auto& message : *messages) {
+    const auto* role = StringField(message, "role");
+    const auto* content = StringField(message, "content");
+    if (!role || !content) return InvalidRequest("invalid request fields");
+    if (*role != "system" && *role != "user" && *role != "assistant")
+      return InvalidRequest("only system, user and assistant roles supported");
+    input.messages.push_back({*role, *content});
+  }
+  return input;
+}
+
+RequestInput ParseTextRequest(const Json& body, const RuntimeConfig& config,
+                              bool test_backend) {
+  if (!test_backend) {
+    auto parsed = ParseTextInput(body, config);
+    if (auto* input = std::get_if<TextInput>(&parsed)) return std::move(*input);
+    return std::get<Failure>(std::move(parsed));
+  }
+  const auto delay = IntegerFieldOr(body, "test_delay_ms", 5);
+  const auto tokens = IntegerFieldOr(body, "max_tokens", 8);
+  const auto injected_failure = BooleanFieldOr(body, "test_throw", false);
+  if (!body.is_object() || !delay || !tokens || !injected_failure)
+    return InvalidRequest("invalid request fields");
+  if (*delay < 0 || *delay > 2000 || *tokens < 1 || *tokens > 2048)
+    return InvalidRequest("invalid test workload");
+  return TestInput{*delay, *tokens, *injected_failure,
+                   IntegerFieldOr(body, "test_chunk_bytes", 1)};
+}
+
+RequestInput ParseTtsRequest(const Json& body) {
+  const auto* text = StringField(body, "input");
+  const auto speed = NumberFieldOr(body, "speed", 1.0);
+  const auto voice = IntegerFieldOr(body, "voice", 2);
+  if (!text || !speed || !voice) return InvalidRequest("invalid request fields");
+  return TtsInput{*text, *speed, *voice};
+}
+
 namespace {
 std::int32_t GreedyScalar(std::span<const float> logits) {
   std::size_t best = 0;
@@ -197,17 +268,6 @@ double ElapsedMs(Clock::time_point begin, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - begin).count();
 }
 
-std::string SseContent(const std::string& id, const std::string& text) {
-  return "data: " +
-         Json{{"id", id},
-              {"object", "chat.completion.chunk"},
-              {"choices", Json::array({{{"index", 0},
-                                        {"delta", {{"content", text}}},
-                                        {"finish_reason", nullptr}}})}}
-             .dump() +
-         "\n\n";
-}
-
 ValueOrFailure<std::string> TakeUtf8(std::string& pending, bool final) {
   std::size_t i = 0;
   while (i < pending.size()) {
@@ -255,31 +315,28 @@ class FakeRuntime final : public Runtime {
   }
   Result Generate(const Request& r, const Emit& emit) override {
     Result result;
-    const auto delay = IntegerFieldOr(r.body, "test_delay_ms", 5);
-    const auto tokens = IntegerFieldOr(r.body, "max_tokens", 8);
-    const auto injected_failure = BooleanFieldOr(r.body, "test_throw", false);
-    if (!r.body.is_object() || !delay || !tokens || !injected_failure)
-      return FailedRequest(InvalidRequest("invalid request fields"));
-    if (*delay < 0 || *delay > 2000 || *tokens < 1 || *tokens > 2048)
-      return FailedRequest(InvalidRequest("invalid test workload"));
-    if (*injected_failure)
+    const auto parsed = ReadRequestInput<TestInput>(r);
+    if (const auto* failure = std::get_if<Failure>(&parsed))
+      return FailedRequest(*failure);
+    const auto& input = *std::get<const TestInput*>(parsed);
+    if (input.inject_failure)
       return FailedRequest(BackendError("injected backend failure"));
     auto started = Clock::now();
     int produced = 0;
-    for (int i = 0; i < *tokens; ++i) {
-      auto until = Clock::now() + std::chrono::milliseconds(*delay);
+    for (int i = 0; i < input.max_tokens; ++i) {
+      auto until = Clock::now() + std::chrono::milliseconds(input.delay_ms);
       while (Clock::now() < until && !r.cancelled->load())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       if (r.cancelled->load() || Clock::now() >= r.deadline) {
         result.outcome = "cancelled";
         break;
       }
-      const auto chunk_bytes = IntegerFieldOr(r.body, "test_chunk_bytes", 1);
+      const auto chunk_bytes = input.chunk_bytes;
       if (!chunk_bytes)
         return FailedRequest(InvalidRequest("invalid request fields"));
       if (*chunk_bytes < 1 || *chunk_bytes > 32768)
         return FailedRequest(InvalidRequest("invalid test chunk size"));
-      if (!emit(SseContent(r.id, std::string(*chunk_bytes, 'x')))) {
+      if (!emit(std::string(*chunk_bytes, 'x'))) {
         result.outcome = "cancelled";
         break;
       }
@@ -302,6 +359,29 @@ class FakeFactory final : public Factory {
   ValueOrFailure<std::unique_ptr<Runtime>> CreateWorker(Task task) override {
     return std::unique_ptr<Runtime>(std::make_unique<FakeRuntime>(task));
   }
+};
+
+class NativeFactory final : public Factory {
+ public:
+  NativeFactory(RuntimeConfig config, TextWorkerBuilder text)
+      : config_(std::move(config)), text_(std::move(text)) {}
+
+  bool Available(Task task) const override {
+    if (task == Task::kLlm) return static_cast<bool>(text_);
+    return task == Task::kAsr ? !config_.asr_dir.empty()
+                              : !config_.tts_dir.empty();
+  }
+
+  ValueOrFailure<std::unique_ptr<Runtime>> CreateWorker(Task task) override {
+    if (!Available(task)) return BackendError("task runtime is unavailable");
+    if (task == Task::kLlm) return text_();
+    if (task == Task::kAsr) return MakeAsrRuntime(config_);
+    return MakeTtsRuntime(config_);
+  }
+
+ private:
+  RuntimeConfig config_;
+  TextWorkerBuilder text_;
 };
 }  // namespace
 
@@ -366,16 +446,50 @@ std::string EncodePcm16(const float* samples, std::size_t count) {
 
 ValueOrFailure<std::unique_ptr<Factory>> MakeFactory(
     const RuntimeConfig& config, bool test_backend) {
-  if (test_backend)
+  if (test_backend) {
+    if (config.text_backend != TextBackend::kLlama)
+      return InvalidRequest("--test-backend cannot select a native backend");
     return std::unique_ptr<Factory>(std::make_unique<FakeFactory>());
-  return MakeLlamaFactory(config);
+  }
+  ValueOrFailure<TextWorkerBuilder> builder = TextWorkerBuilder{};
+  switch (config.text_backend) {
+    case TextBackend::kLlama:
+      if (config.model.empty())
+        return InvalidRequest("llama.cpp requires --model");
+      builder = LoadLlamaBackend(config);
+      break;
+    case TextBackend::kEdgeLlm:
+      if (config.edge_engine_dir.empty() || config.edge_checkpoint_dir.empty())
+        return InvalidRequest(
+            "Edge-LLM requires --engine-dir and --checkpoint-dir");
+      builder = LoadEdgeBackend(config);
+      break;
+    case TextBackend::kNone:
+      if (config.asr_dir.empty() && config.tts_dir.empty())
+        return InvalidRequest("enable at least one text or speech runtime");
+      break;
+  }
+  if (auto* failure = std::get_if<Failure>(&builder))
+    return std::move(*failure);
+  return std::unique_ptr<Factory>(std::make_unique<NativeFactory>(
+      config, std::move(std::get<TextWorkerBuilder>(builder))));
+}
+ValueOrFailure<std::unique_ptr<Factory>> MakeLlamaFactory(
+    const RuntimeConfig& config) {
+  auto native = config;
+  native.text_backend = TextBackend::kLlama;
+  return MakeFactory(native, false);
 }
 #ifndef KVHARBOR_SERVING_LLAMA
-ValueOrFailure<std::unique_ptr<Factory>> MakeLlamaFactory(
-    const RuntimeConfig&) {
+ValueOrFailure<TextWorkerBuilder> LoadLlamaBackend(const RuntimeConfig&) {
   return BackendError(
       "runtime built without llama.cpp; rebuild with "
       "KVHARBOR_SERVING_LLAMA=ON");
+}
+#endif
+#ifndef KVHARBOR_SERVING_EDGE_LLM
+ValueOrFailure<TextWorkerBuilder> LoadEdgeBackend(const RuntimeConfig&) {
+  return BackendError("runtime built without TensorRT Edge-LLM");
 }
 #endif
 #ifndef KVHARBOR_SERVING_AUDIO

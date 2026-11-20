@@ -47,42 +47,31 @@ Sampler MakeGreedyChain() {
   return chain;
 }
 
-ValueOrFailure<std::string> FormatPrompt(const Json& body) {
-  if (body.contains("prompt")) {
-    const auto* prompt = StringField(body, "prompt");
-    if (!prompt) return InvalidRequest("invalid request fields");
-    return *prompt;
-  }
-  const auto* messages = FindField(body, "messages");
-  if (!messages) return InvalidRequest("invalid request fields");
-  if (!messages->is_array() || messages->empty() || messages->size() > 64)
-    return InvalidRequest("messages must contain 1 to 64 text messages");
+ValueOrFailure<std::string> FormatPrompt(const TextInput& input,
+                                         const llama_model* model,
+                                         bool model_template) {
+  if (!input.apply_chat_template)
+    return input.messages.front().content;
   std::vector<llama_chat_message> view;
-  view.reserve(messages->size());
-  for (const auto& message : *messages) {
-    const auto* role = StringField(message, "role");
-    if (!role) return InvalidRequest("invalid request fields");
-    if (*role != "system" && *role != "user" && *role != "assistant")
-      return InvalidRequest("only system, user and assistant roles supported");
-    const auto* content = StringField(message, "content");
-    if (!content) return InvalidRequest("invalid request fields");
-    view.push_back({role->c_str(), content->c_str()});
-  }
-  // The first native adapter explicitly supports the text-only ChatML dialect.
-  // Prefix the configured Qwen model's non-thinking assistant turn.
+  view.reserve(input.messages.size());
+  for (const auto& msg : input.messages)
+    view.push_back({msg.role.data(), msg.content.data()});
+  const char* tmpl =
+      model_template ? llama_model_chat_template(model, nullptr) : "chatml";
+  if (!tmpl) return BackendError("GGUF has no default chat template");
   std::string result(4096, '\0');
-  int n = llama_chat_apply_template("chatml", view.data(), view.size(), true,
+  int n = llama_chat_apply_template(tmpl, view.data(), view.size(), true,
                                     result.data(), result.size());
   if (n <= 0 || n > 1024 * 1024)
     return InvalidRequest("chat template output exceeds limit");
   if (static_cast<std::size_t>(n) > result.size()) {
     result.resize(n);
-    int again = llama_chat_apply_template("chatml", view.data(), view.size(),
-                                          true, result.data(), result.size());
+    int again = llama_chat_apply_template(tmpl, view.data(), view.size(), true,
+                                          result.data(), result.size());
     if (again != n) return BackendError("chat template changed on retry");
   }
   result.resize(n);
-  result += "<think>\n\n</think>\n\n";
+  if (!model_template) result += "<think>\n\n</think>\n\n";
   return result;
 }
 
@@ -178,6 +167,8 @@ class LlamaRuntime final : public Runtime {
   Json Info() const override {
     return {
         {"backend", "llama.cpp"},
+        {"chat_template",
+         config_.model_chat_template ? "model" : "qwen3-nonthinking"},
         {"model", config_.model_id},
         {"context", config_.context},
         {"threads", config_.threads},
@@ -203,27 +194,13 @@ class LlamaRuntime final : public Runtime {
   Result Generate(const Request& r, const Emit& emit) override {
     Result result;
     const auto begin = Clock::now();
-    const auto requested_tokens = IntegerFieldOr(r.body, "max_tokens", 64);
-    if (!r.body.is_object() || !requested_tokens)
-      return FailedRequest(InvalidRequest("invalid request fields"));
-    const int max_tokens = *requested_tokens;
-    if (max_tokens < 1 || max_tokens >= config_.context)
-      return FailedRequest(InvalidRequest(
-          "native adapter requires temperature=0 and a bounded max_tokens"));
-    const auto temperature = NumberFieldOr(r.body, "temperature", 0.0);
-    if (!temperature)
-      return FailedRequest(InvalidRequest("invalid request fields"));
-    if (*temperature != 0.0)
-      return FailedRequest(InvalidRequest(
-          "native adapter requires temperature=0 and a bounded max_tokens"));
-    if (r.body.contains("model")) {
-      const auto* model = StringField(r.body, "model");
-      if (!model)
-        return FailedRequest(InvalidRequest("invalid request fields"));
-      if (*model != config_.model_id)
-        return FailedRequest(InvalidRequest("requested model is not loaded"));
-    }
-    auto prompt = FormatPrompt(r.body);
+    const auto parsed = ReadRequestInput<TextInput>(r);
+    if (const auto* failure = std::get_if<Failure>(&parsed))
+      return FailedRequest(*failure);
+    const auto& input = *std::get<const TextInput*>(parsed);
+    const int max_tokens = input.max_tokens;
+    auto prompt =
+        FormatPrompt(input, model_.get(), config_.model_chat_template);
     if (const auto* failure = std::get_if<Failure>(&prompt))
       return FailedRequest(*failure);
     auto tokenized = Tokenize(vocab_, std::get<std::string>(prompt),
@@ -388,7 +365,7 @@ class LlamaRuntime final : public Runtime {
       if (!text.empty()) {
         if (!result.timings.contains("native_ttft_ms"))
           result.timings["native_ttft_ms"] = ElapsedMs(begin);
-        if (!emit(SseContent(r.id, text))) {
+        if (!emit(text)) {
           result.outcome = "cancelled";
           break;
         }
@@ -408,8 +385,7 @@ class LlamaRuntime final : public Runtime {
       if (const auto* failure = std::get_if<Failure>(&output))
         return FailedRequest(*failure);
       const auto& tail = std::get<std::string>(output);
-      if (!tail.empty() && !emit(SseContent(r.id, tail)))
-        result.outcome = "cancelled";
+      if (!tail.empty() && !emit(tail)) result.outcome = "cancelled";
     }
     result.usage = {{"prompt_tokens", tokens.size()},
                     {"completion_tokens", generated.size()},
@@ -449,42 +425,8 @@ class LlamaRuntime final : public Runtime {
   }
 };
 
-class LlamaFactory final : public Factory {
-  RuntimeConfig config_;
-  Model model_;
-  std::shared_ptr<EngineDispatch> dispatch_;
-
- public:
-  LlamaFactory(const RuntimeConfig& config, Model model)
-      : config_(config), model_(std::move(model)) {
-    if (config_.engine_schedule != EngineSchedule::kOff)
-      dispatch_ = std::make_shared<EngineDispatch>(
-          config_.engine_schedule == EngineSchedule::kDecodeFirst);
-  }
-  bool Available(Task task) const override {
-    if (task == Task::kLlm) return true;
-#ifdef KVHARBOR_SERVING_AUDIO
-    return task == Task::kAsr ? !config_.asr_dir.empty()
-                              : !config_.tts_dir.empty();
-#else
-    return false;
-#endif
-  }
-  ValueOrFailure<std::unique_ptr<Runtime>> CreateWorker(Task task) override {
-    switch (task) {
-      case Task::kLlm:
-        return std::unique_ptr<Runtime>(
-            std::make_unique<LlamaRuntime>(model_, config_, dispatch_));
-      case Task::kAsr:
-        return MakeAsrRuntime(config_);
-      case Task::kTts:
-        return MakeTtsRuntime(config_);
-    }
-    return BackendError("unknown task");
-  }
-};
 }  // namespace
-ValueOrFailure<std::unique_ptr<Factory>> MakeLlamaFactory(
+ValueOrFailure<TextWorkerBuilder> LoadLlamaBackend(
     const RuntimeConfig& config) {
   if (config.context < 128 || config.context > 32768 || config.batch < 1 ||
       config.threads < 1)
@@ -501,7 +443,15 @@ ValueOrFailure<std::unique_ptr<Factory>> MakeLlamaFactory(
   if (!model || !llama_model_has_decoder(model.get()) ||
       llama_model_has_encoder(model.get()))
     return BackendError("failed to load decoder-only GGUF");
-  return std::unique_ptr<Factory>(
-      std::make_unique<LlamaFactory>(config, std::move(model)));
+  std::shared_ptr<EngineDispatch> dispatch;
+  if (config.engine_schedule != EngineSchedule::kOff)
+    dispatch = std::make_shared<EngineDispatch>(config.engine_schedule ==
+                                                EngineSchedule::kDecodeFirst);
+  return TextWorkerBuilder(
+      [model = std::move(model), config,
+       dispatch]() -> ValueOrFailure<std::unique_ptr<Runtime>> {
+        return std::unique_ptr<Runtime>(
+            std::make_unique<LlamaRuntime>(model, config, dispatch));
+      });
 }
 }  // namespace kvharbor::serving

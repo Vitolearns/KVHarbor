@@ -1,14 +1,31 @@
 """Regression checks for failed streams, SLO queueing and worker accounting."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.capacity_bench import ledger_state, project, request_outcome
+from scripts.capacity_bench import fingerprints, ledger_state, project, request_outcome
 
 
 class CapacityTests(unittest.TestCase):
+    def test_edge_engine_fingerprint_requires_real_engine_and_matching_health(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(scope="real-http-sse", model="qwen", expected_backend="tensorrt-edge-llm",
+                                   engine_dir=Path(directory), server_binary=None, model_file=None)
+            runtime = {"backend": "llama.cpp", "model": "qwen", "sdk_version": "0.12.0"}
+            health = {"runtimes": {"llm": runtime}}
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                fingerprints(args, health)
+            runtime["backend"] = args.expected_backend
+            with self.assertRaisesRegex(RuntimeError, "No serialized engine"):
+                fingerprints(args, health)
+            (args.engine_dir / "llm.engine").write_bytes(b"fixture")
+            report = fingerprints(args, health)
+            self.assertEqual(report["runtime_lock"]["backend"], args.expected_backend)
+            self.assertIn("llm.engine", report["engine_sha256"])
+
     def test_client_timeout_after_http_headers(self):
         self.assertEqual(request_outcome({"http_status": 200, "outcome": "timed_out"}), "timeout")
 

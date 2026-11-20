@@ -123,6 +123,11 @@ def screen(paths):
                 findings.append({"file": str(path), "line": 1, "rule": "header_guard"})
         for rule, pattern in rules.items():
             for match in re.finditer(pattern, text):
+                # The vendor API throws. Only its boundary may catch and translate
+                # an SDK error into the service's Failure type.
+                if (rule == "exceptions" and match.group() == "catch"
+                        and path == Path("serving/src/edge_sdk_boundary.h")):
+                    continue
                 findings.append({"file": str(path), "line": text.count("\n", 0, match.start()) + 1,
                                  "rule": rule})
         for directive in include_directive.finditer(text):

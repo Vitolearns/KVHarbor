@@ -18,7 +18,8 @@ DEFAULT_SAMPLES = ("f1_noise.wav", "noise2.wav", "cantonese.wav", "codeswitch.wa
 
 
 def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def character_error(reference, hypothesis):
@@ -35,17 +36,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8082")
     parser.add_argument("--model-dir", type=Path, default=ROOT / "models/audio/qwen3-asr-0.6b-int8")
+    parser.add_argument("--fixture-dir", type=Path, help="pinned 0.6B archive containing test_wavs")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--samples", nargs="+", default=DEFAULT_SAMPLES)
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
-    lock = json.loads((ROOT / "configs/runtime/audio.json").read_text())["asr"]
+    catalog = json.loads((ROOT / "configs/runtime/audio.json").read_text())
+    models = {entry["id"]: entry for entry in (catalog["asr"], catalog["asr_1_7b"])}
     marker = json.loads((args.model_dir / ".kvharbor-asset.json").read_text())
-    if marker["sha256"] != lock["sha256"]:
-        parser.error("ASR model install does not match the pinned archive")
+    lock = models.get(marker.get("id"))
+    if not lock or marker != lock:
+        parser.error("ASR model install does not match the model lock")
+    for name, spec in lock.get("files", {}).items():
+        if sha256(args.model_dir / name) != spec["sha256"]:
+            parser.error("ASR artifact differs from the lock: " + name)
+    fixtures = args.fixture_dir or args.model_dir
+    fixture_lock = json.loads((fixtures / ".kvharbor-asset.json").read_text())
+    if fixture_lock.get("sha256") != catalog["asr"]["sha256"]:
+        parser.error("--fixture-dir must contain the pinned reference recordings")
     if len(set(args.samples)) != len(args.samples):
         parser.error("sample names must be unique")
-    directory = args.model_dir / "test_wavs"
+    directory = fixtures / "test_wavs"
     transcript = directory / "transcript.txt"
     references = dict(line.split(maxsplit=1) for line in transcript.read_text().splitlines() if line.strip())
     inputs = []
@@ -67,7 +78,8 @@ def main():
         "schema_version": 1,
         "scope": "upstream demonstration recordings; small functional sample, not held-out accuracy evaluation",
         "reference_source": "test_wavs/transcript.txt from the pinned ASR archive",
-        "archive_sha256": lock["sha256"], "transcript_sha256": sha256(transcript),
+        "archive_sha256": lock.get("sha256"), "fixture_archive_sha256": fixture_lock["sha256"],
+        "model_lock": lock, "transcript_sha256": sha256(transcript),
         "normalization": "Unicode NFKC, casefold, retain alphanumeric characters; micro CER across clips",
         "health": health, "initial_state": get_json(base, "/state"), "samples": [],
         "status": "running",

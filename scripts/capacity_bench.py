@@ -150,16 +150,35 @@ def fingerprints(args, health):
     def sha(path):
         with path.open("rb") as stream:
             return hashlib.file_digest(stream, "sha256").hexdigest()
+    runtime = health.get("runtimes", {}).get("llm", {})
+    lock = None
+    engines = {}
+    if args.scope == "real-http-sse":
+        if runtime.get("backend") != args.expected_backend or runtime.get("model") != args.model:
+            raise RuntimeError("Requested backend or model differs from the running service")
+        filename = "edge-llm.json" if args.expected_backend == "tensorrt-edge-llm" else "llama.json"
+        lock = json.loads((ROOT / "configs/runtime" / filename).read_text())
+        if "model" in lock and lock["model"]["id"] != args.model:
+            del lock["model"]
+        if args.expected_backend == "tensorrt-edge-llm":
+            if runtime.get("sdk_version") != lock["version"]:
+                raise RuntimeError("Edge-LLM version differs from the pinned SDK")
+            if not args.engine_dir or not args.engine_dir.is_dir():
+                raise RuntimeError("Edge-LLM measurements require --engine-dir for artifact hashes")
+            files = [p for p in sorted(args.engine_dir.rglob("*")) if p.is_file()]
+            if not any(p.suffix.lower() in (".engine", ".plan", ".trt") for p in files):
+                raise RuntimeError("No serialized engine in --engine-dir")
+            engines = {str(p.relative_to(args.engine_dir)): sha(p) for p in files}
     return {
         "health": health,
         "measured_source_sha256": {str(p.relative_to(ROOT)): sha(p) for p in paths},
         "server_binary_sha256": sha(args.server_binary) if args.server_binary else None,
         "model_sha256": sha(args.model_file) if args.model_file else None,
-        "runtime_lock": json.loads((ROOT / "configs/runtime/llama.json").read_text()),
+        "runtime_lock": lock, "engine_sha256": engines,
     }
 
 
-def gpu_samples(stop, samples):
+def gpu_samples(stop, samples, interval):
     command = ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu,"
                "temperature.gpu,clocks.current.sm,power.draw,driver_version", "--format=csv,noheader,nounits"]
     while not stop.is_set():
@@ -170,7 +189,7 @@ def gpu_samples(stop, samples):
         except (OSError, subprocess.TimeoutExpired) as error:
             samples.append({"error": type(error).__name__})
             return
-        stop.wait(5)
+        stop.wait(interval)
 
 
 def main():
@@ -190,17 +209,21 @@ def main():
     parser.add_argument("--burst-count", type=int, default=24)
     parser.add_argument("--server-binary", type=Path)
     parser.add_argument("--model-file", type=Path)
+    parser.add_argument("--engine-dir", type=Path)
+    parser.add_argument("--expected-backend", choices=("llama.cpp", "tensorrt-edge-llm"),
+                        default="llama.cpp")
+    parser.add_argument("--gpu-sample-interval", type=float, default=5)
     parser.add_argument("--scope", choices=("real-http-sse", "test-double"), default="real-http-sse")
     args = parser.parse_args()
     positive = [*args.rates, args.requests, args.repeats, args.concurrency,
-                args.client_timeout, args.drain_seconds, args.ttft_ms, args.tpot_ms]
+                args.client_timeout, args.drain_seconds, args.ttft_ms, args.tpot_ms,
+                args.gpu_sample_interval]
     if any(not math.isfinite(value) or value <= 0 for value in positive) or args.burst_count < 0:
         parser.error("Run parameters must be finite and positive. Zero burst count skips bursts.")
     health = endpoint(args, "health")
     if health.get("status") != "ok":
         raise RuntimeError("KVHarbor health check failed")
-    if args.scope == "real-http-sse" and health.get("runtimes", {}).get("llm", {}).get("backend") != "llama.cpp":
-        raise RuntimeError("Real capacity runs require the llama.cpp backend")
+    evidence = fingerprints(args, health)
     args.output_dir.mkdir(parents=True)
     report = {
         "schema_version": 2, "scope": args.scope, "model_id": args.model,
@@ -208,11 +231,13 @@ def main():
         "slo_ms": {"arrival_to_first_token": args.ttft_ms, "tpot": args.tpot_ms},
         "slo_ttft_includes_client_queue": True,
         "client_concurrency": args.concurrency, "client_timeout_seconds": args.client_timeout,
-        **fingerprints(args, health), "runs": [], "overload_recovery": [], "gpu_samples": [],
+        **evidence, "runs": [], "overload_recovery": [], "gpu_samples": [],
+        "gpu_sample_interval_s": args.gpu_sample_interval,
     }
     initial, _ = idle_state(args)
     stop = threading.Event()
-    sampler = threading.Thread(target=gpu_samples, args=(stop, report["gpu_samples"]), daemon=True)
+    sampler = threading.Thread(target=gpu_samples,
+                               args=(stop, report["gpu_samples"], args.gpu_sample_interval), daemon=True)
     sampler.start()
     try:
         report["warmup"] = replay(args, "warmup", 3, 0, "fixed", 40)

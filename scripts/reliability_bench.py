@@ -54,6 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:8083")
     parser.add_argument("--model", required=True)
+    parser.add_argument("--backend", choices=("llama.cpp", "tensorrt-edge-llm"), default="llama.cpp")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--container")
     parser.add_argument("--crash", action="store_true",
@@ -80,8 +81,9 @@ def main():
     followup = {"prompt": "The sum of 17 and 25 is", "max_tokens": 24}
     try:
         health, _ = wait_healthy(args)
-        if health.get("runtimes", {}).get("llm", {}).get("backend") != "llama.cpp":
-            raise RuntimeError("This acceptance test requires real llama.cpp inference")
+        actual = health.get("runtimes", {}).get("llm", {}).get("backend")
+        if actual != args.backend:
+            raise RuntimeError(f"Expected {args.backend} in /health, received {actual!r}")
         report["health"] = health
         warmup = stream(args, followup)
         if request_outcome(warmup) != "completed":
@@ -103,9 +105,12 @@ def main():
             raise RuntimeError("Running deadline was not recorded exactly once")
         report["deadline"] = {"client": timed, "client_outcome": request_outcome(timed),
                               "ledger": delta, "time_to_idle_ms": wait_ms}
-        if request_outcome(stream(args, followup)) != "completed":
+        before, _ = idle_state(args)
+        recovered = stream(args, followup)
+        if request_outcome(recovered) != "completed":
             raise RuntimeError("Request after cancellation and deadline did not recover")
-        idle_state(args)
+        delta, wait_ms = terminal_delta(args, before)
+        report["followup"] = {"client": recovered, "ledger": delta, "time_to_idle_ms": wait_ms}
 
         if args.crash:
             # A foreground Docker CLI exiting is not proof of automatic recovery.

@@ -18,14 +18,13 @@ using kvharbor::serving::Clock;
 using kvharbor::serving::ElapsedMs;
 using kvharbor::serving::Factory;
 using kvharbor::serving::Failure;
-using kvharbor::serving::FindField;
 using kvharbor::serving::Json;
 using kvharbor::serving::MakeFactory;
 using kvharbor::serving::ParseSamplingMode;
+using kvharbor::serving::ParseTextRequest;
 using kvharbor::serving::Request;
 using kvharbor::serving::Runtime;
 using kvharbor::serving::RuntimeConfig;
-using kvharbor::serving::StringField;
 using kvharbor::serving::Task;
 
 namespace {
@@ -46,6 +45,13 @@ int main(int argc, char** argv) {
       config.reuse_context = true;
       continue;
     }
+    if (arg == "--model-chat-template" || arg == "--edge-no-cuda-graph") {
+      if (arg == "--model-chat-template")
+        config.model_chat_template = true;
+      else
+        config.edge_cuda_graph = false;
+      continue;
+    }
     if (arg == "--test-backend") {
       fake = true;
       continue;
@@ -58,7 +64,8 @@ int main(int argc, char** argv) {
     if (arg == "--warmup") numeric = &warmup;
     if (numeric == nullptr && arg != "--model" && arg != "--model-id" &&
         arg != "--max-output-rows" && arg != "--sampling" && arg != "--input" &&
-        arg != "--output")
+        arg != "--output" && arg != "--text-backend" && arg != "--engine-dir" &&
+        arg != "--checkpoint-dir")
       return BenchmarkError("unknown option: " + std::string(arg));
     if (++i >= argc) return BenchmarkError("missing option value");
     const char* value = argv[i];
@@ -77,7 +84,16 @@ int main(int argc, char** argv) {
       config.model = value;
     else if (arg == "--model-id")
       config.model_id = value;
-    else if (arg == "--max-output-rows") {
+    else if (arg == "--engine-dir")
+      config.edge_engine_dir = value;
+    else if (arg == "--checkpoint-dir")
+      config.edge_checkpoint_dir = value;
+    else if (arg == "--text-backend") {
+      auto backend = kvharbor::serving::ParseTextBackend(value);
+      if (!backend || *backend == kvharbor::serving::TextBackend::kNone)
+        return BenchmarkError("select an executable text backend");
+      config.text_backend = *backend;
+    } else if (arg == "--max-output-rows") {
       const std::string_view rows = value;
       if (rows != "0" && rows != "1")
         return BenchmarkError("--max-output-rows requires 0 or 1");
@@ -93,11 +109,8 @@ int main(int argc, char** argv) {
     else if (arg == "--output")
       output = value;
   }
-  if ((!fake && config.model.empty()) || input.empty() || output.empty() ||
-      warmup < 0 || repeat < 1)
-    return BenchmarkError(
-        "requires --model, --input and --output; --reuse-context enables "
-        "reuse");
+  if (input.empty() || output.empty() || warmup < 0 || repeat < 1)
+    return BenchmarkError("requires --input, --output and valid repeat counts");
   std::ifstream jobs(input);
   if (!jobs) return BenchmarkError("cannot read workload");
   std::vector<Json> rows;
@@ -120,35 +133,21 @@ int main(int argc, char** argv) {
   if (!out) return BenchmarkError("cannot write result");
   auto invoke = [&](const Json& body, std::string id, bool measured) -> int {
     Request r;
-    r.body = body;
     r.id = std::move(id);
     r.deadline = Clock::now() + std::chrono::minutes(3);
     auto start = Clock::now();
+    r.input = ParseTextRequest(body, config, fake);
     double ttft = -1.0;
+    double last_output_ms = -1.0;
     std::string text;
-    bool invalid_chunk = false;
     auto res = runtime->Generate(r, [&](std::string data) {
-      if (ttft < 0) ttft = ElapsedMs(start);
-      if (!data.starts_with("data: ")) {
-        invalid_chunk = true;
-        return false;
+      if (!data.empty()) {
+        last_output_ms = ElapsedMs(start);
+        if (ttft < 0) ttft = last_output_ms;
       }
-      const auto chunk =
-          Json::parse(std::string_view(data).substr(6), nullptr, false);
-      const auto* choices = FindField(chunk, "choices");
-      const auto* delta = choices && choices->is_array() && !choices->empty()
-                              ? FindField((*choices)[0], "delta")
-                              : nullptr;
-      const auto* content = delta ? StringField(*delta, "content") : nullptr;
-      if (!content) {
-        invalid_chunk = true;
-        return false;
-      }
-      text += *content;
+      text += data;
       return true;
     });
-    if (invalid_chunk)
-      return BenchmarkError("invalid SSE content from runtime");
     if (!res.diagnostic.empty()) return BenchmarkError(res.diagnostic);
     if (res.outcome == "bad_request") return BenchmarkError(res.error);
     Json row = {{"id", r.id},
@@ -157,6 +156,7 @@ int main(int argc, char** argv) {
                 {"error", res.error},
                 {"runtime", runtime->Info()},
                 {"ttft_ms", ttft},
+                {"last_output_ms", last_output_ms},
                 {"wall_ms", ElapsedMs(start)},
                 {"timings", res.timings},
                 {"usage", res.usage},

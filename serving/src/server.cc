@@ -5,17 +5,12 @@
 #include <boost/version.hpp>
 #include <charconv>
 #include <chrono>
-#include <condition_variable>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <deque>
-#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include "admission.h"
 #include "kvharbor/serving/runtime.h"
 
 namespace net = boost::asio;
@@ -32,21 +28,24 @@ namespace http = beast::http;
 using Tcp = net::ip::tcp;
 using Error = boost::system::error_code;
 using std::chrono_literals::operator""s;
+using kvharbor::serving::Admission;
+using kvharbor::serving::AsrInput;
 using kvharbor::serving::BooleanFieldOr;
 using kvharbor::serving::Clock;
-using kvharbor::serving::ElapsedMs;
 using kvharbor::serving::EngineSchedule;
 using kvharbor::serving::Factory;
 using kvharbor::serving::Failure;
 using kvharbor::serving::InvalidRequest;
+using kvharbor::serving::Job;
 using kvharbor::serving::Json;
 using kvharbor::serving::MakeFactory;
-using kvharbor::serving::Name;
 using kvharbor::serving::ParseSamplingMode;
-using kvharbor::serving::Request;
-using kvharbor::serving::Result;
-using kvharbor::serving::Runtime;
+using kvharbor::serving::ParseTextRequest;
+using kvharbor::serving::ParseTtsRequest;
+using kvharbor::serving::Pipe;
+using kvharbor::serving::PrepareSlots;
 using kvharbor::serving::RuntimeConfig;
+using kvharbor::serving::Slot;
 using kvharbor::serving::Task;
 using kvharbor::serving::ValueOrFailure;
 static_assert(BOOST_VERSION >= 108300,
@@ -102,6 +101,8 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
   const std::array strings{
       TextOption{"--model", o.runtime.model},
       TextOption{"--model-id", o.runtime.model_id},
+      TextOption{"--engine-dir", o.runtime.edge_engine_dir},
+      TextOption{"--checkpoint-dir", o.runtime.edge_checkpoint_dir},
       TextOption{"--asr-model-dir", o.runtime.asr_dir},
       TextOption{"--tts-model-dir", o.runtime.tts_dir},
       TextOption{"--bind", o.bind},
@@ -110,6 +111,14 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
     const std::string_view argument = argv[i];
     if (argument == "--reuse-context") {
       o.runtime.reuse_context = true;
+      continue;
+    }
+    if (argument == "--model-chat-template" ||
+        argument == "--edge-no-cuda-graph") {
+      if (argument == "--model-chat-template")
+        o.runtime.model_chat_template = true;
+      else
+        o.runtime.edge_cuda_graph = false;
       continue;
     }
     if (argument == "--test-backend") {
@@ -125,7 +134,7 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
         [argument](const TextOption& entry) { return entry.name == argument; });
     if (number == numbers.end() && text == strings.end() &&
         argument != "--engine-schedule" && argument != "--sampling" &&
-        argument != "--policy")
+        argument != "--policy" && argument != "--text-backend")
       return InvalidRequest("unknown option: " + std::string(argument));
     if (++i >= argc)
       return InvalidRequest("missing value for " + std::string(argument));
@@ -136,6 +145,10 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
       number->destination = *n;
     } else if (text != strings.end()) {
       text->destination = value;
+    } else if (argument == "--text-backend") {
+      auto backend = kvharbor::serving::ParseTextBackend(value);
+      if (!backend) return InvalidRequest("unknown text backend");
+      o.runtime.text_backend = *backend;
     } else if (argument == "--engine-schedule") {
       if (value == "fifo")
         o.runtime.engine_schedule = EngineSchedule::kFifo;
@@ -160,329 +173,9 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
   }
   if (o.runtime.prefill_chunk > o.runtime.batch)
     return InvalidRequest("prefill chunk cannot exceed batch size");
-  if (!o.fake && o.runtime.model.empty())
-    return InvalidRequest("--model is required");
   o.runtime.max_output_rows = static_cast<std::uint32_t>(output_rows);
   return o;
 }
-
-// The reactor owns the timer. Producers may wait for capacity, and cancellation
-// wakes them. Bytes remain charged until the corresponding socket write
-// finishes.
-class Pipe : public std::enable_shared_from_this<Pipe> {
-  net::any_io_executor executor_;
-  net::steady_timer signal_;
-  std::mutex mutex_;
-  std::condition_variable space_;
-  std::deque<std::shared_ptr<const std::string>> chunks_;
-  std::size_t bytes_ = 0, peak_ = 0, cap_;
-  bool stopped_ = false, saturated_ = false;
-  std::chrono::milliseconds wait_limit_;
-
- public:
-  Pipe(net::io_context& io, std::size_t cap,
-       std::chrono::milliseconds wait_limit)
-      : executor_(io.get_executor()),
-        signal_(io),
-        cap_(cap),
-        wait_limit_(wait_limit) {}
-  void notify() { signal_.cancel(); }
-  net::awaitable<void> wait() {
-    signal_.expires_at(Clock::time_point::max());
-    Error ec;
-    co_await signal_.async_wait(net::redirect_error(net::use_awaitable, ec));
-  }
-  bool put(std::string chunk, const Request& r) {
-    std::unique_lock lock(mutex_);
-    if (chunk.empty()) return !stopped_;
-    if (chunk.size() > cap_) {
-      saturated_ = true;
-      return false;
-    }
-    auto available = [&] {
-      return stopped_ || r.cancelled->load() || chunk.size() <= cap_ - bytes_;
-    };
-    if (!space_.wait_until(lock,
-                           std::min(r.deadline, Clock::now() + wait_limit_),
-                           available)) {
-      saturated_ = Clock::now() < r.deadline;
-      return false;
-    }
-    if (stopped_ || r.cancelled->load() || Clock::now() >= r.deadline)
-      return false;
-    bool wake = chunks_.empty();
-    bytes_ += chunk.size();
-    peak_ = std::max(peak_, bytes_);
-    chunks_.push_back(std::make_shared<const std::string>(std::move(chunk)));
-    lock.unlock();
-    if (wake)
-      net::post(executor_, [self = shared_from_this()] { self->notify(); });
-    return true;
-  }
-  std::shared_ptr<const std::string> front() {
-    std::lock_guard lock(mutex_);
-    return chunks_.empty() ? nullptr : chunks_.front();
-  }
-  void consumed() {
-    std::lock_guard lock(mutex_);
-    if (chunks_.empty()) return;
-    bytes_ -= chunks_.front()->size();
-    chunks_.pop_front();
-    space_.notify_one();
-  }
-  void stop() {
-    {
-      std::lock_guard lock(mutex_);
-      stopped_ = true;
-      chunks_.clear();
-      bytes_ = 0;
-    }
-    space_.notify_all();
-    notify();
-  }
-  std::size_t peak() {
-    std::lock_guard lock(mutex_);
-    return peak_;
-  }
-  bool saturated() {
-    std::lock_guard lock(mutex_);
-    return saturated_;
-  }
-};
-
-struct Job {
-  Request request;
-  std::shared_ptr<Pipe> pipe;
-  std::optional<Clock::time_point> started;
-  std::optional<Result> result;
-  std::string stop_reason;
-};
-
-struct Slot {
-  Task task;
-  std::unique_ptr<Runtime> runtime;
-  std::shared_ptr<Job> job;
-};
-
-ValueOrFailure<std::vector<Slot>> PrepareSlots(const Options& options,
-                                               Factory& factory) {
-  std::vector<Slot> slots;
-  for (const auto task : {Task::kLlm, Task::kAsr, Task::kTts}) {
-    if (!factory.Available(task)) continue;
-    const int count = task == Task::kLlm ? options.workers : 1;
-    for (int i = 0; i < count; ++i) {
-      auto worker = factory.CreateWorker(task);
-      if (const auto* failure = std::get_if<Failure>(&worker)) return *failure;
-      slots.push_back({task,
-                       std::move(std::get<std::unique_ptr<Runtime>>(worker)),
-                       nullptr});
-    }
-  }
-  return slots;
-}
-
-class Admission {
-  net::io_context& io_;
-  const Options& options_;
-  std::vector<Slot> slots_;
-  net::thread_pool pool_;
-  std::array<std::deque<std::shared_ptr<Job>>, 3> queues_;
-  std::map<std::string, std::uint64_t> outcomes_;
-  std::uint64_t accepted_ = 0, started_ = 0, rejected_ = 0, releases_ = 0,
-                serial_ = 0;
-  std::size_t peak_buffer_ = 0;
-  bool draining_ = false;
-  Json runtime_info_ = Json::object();
-
-  void complete(const std::shared_ptr<Job>& job, Result result) {
-    if (job->result) std::abort();
-    if (!job->stop_reason.empty())
-      result.outcome = job->stop_reason;
-    else if (job->pipe->saturated())
-      result.outcome = "backpressure";
-    else if (result.outcome == "cancelled" &&
-             Clock::now() >= job->request.deadline)
-      result.outcome = "deadline";
-    ++outcomes_[result.outcome];
-    peak_buffer_ = std::max(peak_buffer_, job->pipe->peak());
-    auto details = result.details;
-    details.erase("token_ids");
-    details.erase("text");
-    Json record = {
-        {"id", job->request.id},
-        {"task", Name(job->request.task)},
-        {"outcome", result.outcome},
-        {"queue_ms", job->started
-                         ? ElapsedMs(job->request.received, *job->started)
-                         : ElapsedMs(job->request.received)},
-        {"backend_finished_ms", ElapsedMs(job->request.received)},
-        {"slot_released", bool(job->started)},
-        {"peak_buffer_bytes", job->pipe->peak()},
-        {"usage", result.usage},
-        {"timings", result.timings},
-        {"details", details}};
-    std::cout << record.dump() << '\n' << std::flush;
-    job->result = std::move(result);
-    job->pipe->notify();
-  }
-
-  void start(std::size_t index, std::shared_ptr<Job> job) {
-    auto& slot = slots_[index];
-    slot.job = job;
-    job->started = Clock::now();
-    ++started_;
-    job->pipe->notify();
-    net::post(pool_, [this, index, job] {
-      auto result =
-          slots_[index].runtime->Generate(job->request, [&](std::string chunk) {
-            return job->pipe->put(std::move(chunk), job->request);
-          });
-      if (!result.diagnostic.empty())
-        std::cerr << "runtime request " << job->request.id << ": "
-                  << result.diagnostic << '\n';
-      net::post(io_, [this, index, job, result = std::move(result)]() mutable {
-        slots_[index].job.reset();
-        ++releases_;
-        complete(job, std::move(result));
-        dispatch();
-        if (draining_ && active() == 0 && on_drained) on_drained();
-      });
-    });
-  }
-
-  void dispatch() {
-    if (draining_) return;
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-      if (slots_[i].job) continue;
-      auto& queue = queues_[static_cast<int>(slots_[i].task)];
-      while (!queue.empty()) {
-        auto it = options_.earliest_deadline
-                      ? std::min_element(queue.begin(), queue.end(),
-                                         [](const auto& a, const auto& b) {
-                                           return a->request.deadline <
-                                                  b->request.deadline;
-                                         })
-                      : queue.begin();
-        auto job = std::move(*it);
-        queue.erase(it);
-        if (Clock::now() >= job->request.deadline) {
-          Result res;
-          res.outcome = "deadline";
-          complete(job, std::move(res));
-          continue;
-        }
-        start(i, std::move(job));
-        break;
-      }
-    }
-  }
-
- public:
-  std::function<void()> on_drained;
-  Admission(net::io_context& io, const Options& options,
-            std::vector<Slot> slots)
-      : io_(io),
-        options_(options),
-        slots_(std::move(slots)),
-        pool_(slots_.size()) {
-    for (const auto& slot : slots_)
-      if (!runtime_info_.contains(Name(slot.task)))
-        runtime_info_[Name(slot.task)] = slot.runtime->Info();
-  }
-  ~Admission() { pool_.join(); }
-  bool supports(Task task) const { return runtime_info_.contains(Name(task)); }
-  const Json& Info() const { return runtime_info_; }
-  std::string next_id() { return "kvh-" + std::to_string(++serial_); }
-  std::size_t active() const {
-    return std::count_if(slots_.begin(), slots_.end(),
-                         [](const auto& s) { return bool(s.job); });
-  }
-  bool submit(const std::shared_ptr<Job>& job) {
-    if (draining_) {
-      ++rejected_;
-      return false;
-    }
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-      if (slots_[i].task == job->request.task && !slots_[i].job) {
-        ++accepted_;
-        start(i, job);
-        return true;
-      }
-    }
-    auto& queue = queues_[static_cast<int>(job->request.task)];
-    if (queue.size() >= static_cast<std::size_t>(options_.queue)) {
-      ++rejected_;
-      return false;
-    }
-    ++accepted_;
-    queue.push_back(job);
-    return true;
-  }
-  void cancel(const std::shared_ptr<Job>& job, std::string reason) {
-    if (!job) return;
-    if (job->stop_reason.empty()) job->stop_reason = std::move(reason);
-    job->request.cancelled->store(true);
-    job->pipe->stop();
-    if (job->result || job->started) return;
-    auto& queue = queues_[static_cast<int>(job->request.task)];
-    auto it = std::find(queue.begin(), queue.end(), job);
-    if (it != queue.end()) {
-      queue.erase(it);
-      Result res;
-      res.outcome = job->stop_reason;
-      complete(job, std::move(res));
-    }
-  }
-  void shutdown() {
-    draining_ = true;
-    for (auto& q : queues_)
-      while (!q.empty()) {
-        auto job = q.front();
-        cancel(job, "shutdown");
-      }
-    for (auto& slot : slots_)
-      if (slot.job) cancel(slot.job, "shutdown");
-    if (active() == 0 && on_drained) on_drained();
-  }
-  Json snapshot() const {
-    Json tasks = Json::object();
-    for (auto t : {Task::kLlm, Task::kAsr, Task::kTts}) {
-      std::size_t busy = 0, limit = 0;
-      for (const auto& s : slots_)
-        if (s.task == t) {
-          ++limit;
-          busy += bool(s.job);
-        }
-      tasks[Name(t)] = {{"active", busy},
-                        {"slots", limit},
-                        {"queued", queues_[static_cast<int>(t)].size()}};
-    }
-    return {{"accepted", accepted_},
-            {"started", started_},
-            {"rejected", rejected_},
-            {"slot_releases", releases_},
-            {"active", active()},
-            {"outcomes", outcomes_},
-            {"peak_buffer_bytes", peak_buffer_},
-            {"tasks", tasks},
-            {"draining", draining_}};
-  }
-  std::string metrics() const {
-    auto s = snapshot();
-    std::string text;
-    for (auto key : {"accepted", "started", "rejected", "slot_releases",
-                     "active", "peak_buffer_bytes"})
-      text += "kvharbor_" + std::string(key) + " " + s.at(key).dump() + "\n";
-    for (auto& [key, value] : s.at("outcomes").items())
-      text += "kvharbor_backend_outcomes_total{outcome=\"" + key + "\"} " +
-              value.dump() + "\n";
-    for (auto& [task, value] : s.at("tasks").items())
-      for (auto key : {"active", "queued", "slots"})
-        text += "kvharbor_task_" + std::string(key) + "{task=\"" + task +
-                "\"} " + value.at(key).dump() + "\n";
-    return text;
-  }
-};
 
 struct Client {
   beast::tcp_stream stream;
@@ -520,6 +213,32 @@ std::string error_body(const std::string& text) {
   return Json{{"error", {{"message", text}}}}.dump();
 }
 
+std::string SseContent(const std::string& id, const std::string& text) {
+  return "data: " +
+         Json{{"id", id},
+              {"object", "chat.completion.chunk"},
+              {"choices", Json::array({{{"index", 0},
+                                        {"delta", {{"content", text}}},
+                                        {"finish_reason", nullptr}}})}}
+             .dump() +
+         "\n\n";
+}
+
+std::string Metrics(Json s) {
+  std::string text;
+  for (auto key : {"accepted", "started", "rejected", "slot_releases",
+                   "active", "peak_buffer_bytes"})
+    text += "kvharbor_" + std::string(key) + " " + s.at(key).dump() + "\n";
+  for (auto& [key, value] : s.at("outcomes").items())
+    text += "kvharbor_backend_outcomes_total{outcome=\"" + key + "\"} " +
+            value.dump() + "\n";
+  for (auto& [task, value] : s.at("tasks").items())
+    for (auto key : {"active", "queued", "slots"})
+      text += "kvharbor_task_" + std::string(key) + "{task=\"" + task +
+              "\"} " + value.at(key).dump() + "\n";
+  return text;
+}
+
 net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
                            Admission& admission, const Options& options) {
   auto& stream = client->stream;
@@ -544,16 +263,17 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
     if (req.target() == "/health")
       body = Json{{"status", "ok"}, {"runtimes", admission.Info()}}.dump();
     else if (req.target() == "/state")
-      body = admission.snapshot().dump();
+      body = admission.Snapshot().dump();
     else if (req.target() == "/metrics") {
-      body = admission.metrics();
+      body = Metrics(admission.Snapshot());
       type = "text/plain; version=0.0.4";
-    } else if (req.target() == "/v1/models")
-      body = Json{{"object", "list"},
-                  {"data", Json::array({{{"id", options.runtime.model_id},
-                                         {"object", "model"}}})}}
-                 .dump();
-    else {
+    } else if (req.target() == "/v1/models") {
+      auto models = Json::array();
+      if (admission.Supports(Task::kLlm))
+        models.push_back(
+            {{"id", options.runtime.model_id}, {"object", "model"}});
+      body = Json{{"object", "list"}, {"data", std::move(models)}}.dump();
+    } else {
       status = http::status::not_found;
       body = error_body("unknown endpoint");
     }
@@ -576,14 +296,14 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
                    error_body("expected POST"));
     co_return;
   }
-  if (!admission.supports(task)) {
+  if (!admission.Supports(task)) {
     co_await reply(*client, http::status::service_unavailable,
                    error_body("task runtime is unavailable"));
     co_return;
   }
   auto job = std::make_shared<Job>();
   job->request.task = task;
-  job->request.id = admission.next_id();
+  job->request.id = admission.NextId();
   job->pipe = std::make_shared<Pipe>(
       io, options.buffer_bytes, std::chrono::milliseconds(options.write_ms));
   int timeout = options.timeout_ms;
@@ -601,13 +321,19 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
   if (valid) {
     if (task == Task::kAsr) {
       valid = req[http::field::content_type].starts_with("audio/wav");
-      if (valid) job->request.audio = std::move(req.body());
+      if (valid) job->request.input = AsrInput{std::move(req.body())};
     } else {
-      job->request.body = Json::parse(req.body(), nullptr, false);
-      valid = job->request.body.is_object();
+      const auto body = Json::parse(req.body(), nullptr, false);
+      valid = body.is_object();
       if (valid && task == Task::kLlm)
-        valid =
-            BooleanFieldOr(job->request.body, "stream", false).value_or(false);
+        valid = BooleanFieldOr(body, "stream", false).value_or(false);
+      // Keep input errors on the job so admission and terminal accounting
+      // still follow the same path as an error from the worker.
+      if (valid)
+        job->request.input =
+            task == Task::kLlm
+                ? ParseTextRequest(body, options.runtime, options.fake)
+                : ParseTtsRequest(body);
     }
   }
   if (!valid) {
@@ -615,7 +341,11 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
                    error_body("invalid body, content type or deadline"));
     co_return;
   }
-  if (!admission.submit(job)) {
+  if (task == Task::kLlm)
+    job->encode_chunk = [id = job->request.id](std::string text) {
+      return SseContent(id, text);
+    };
+  if (!admission.Submit(job)) {
     co_await reply(*client, http::status::too_many_requests,
                    error_body("task queue is full"));
     co_return;
@@ -624,7 +354,7 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
   client->deadline.expires_at(job->request.deadline);
   client->deadline.async_wait([client, job, &admission](Error e) {
     if (e || client->closed) return;
-    admission.cancel(job, "deadline");
+    admission.Cancel(job, "deadline");
     if (client->header_sent) client->close();
   });
   // There is no HTTP pipelining on this connection. An EOF/reset (or extra
@@ -633,14 +363,14 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
       net::buffer(client->watch),
       [client, job, &admission](Error e, std::size_t) {
         if (!client->closed && e != net::error::operation_aborted) {
-          admission.cancel(job, "client_disconnected");
+          admission.Cancel(job, "client_disconnected");
           client->close();
         }
       });
 
   while (!client->closed && !job->result && !job->request.cancelled->load() &&
-         (task == Task::kAsr || !job->pipe->front()))
-    co_await job->pipe->wait();
+         (task == Task::kAsr || !job->pipe->Front()))
+    co_await job->pipe->Wait();
   if (client->closed) co_return;
   if (job->request.cancelled->load() ||
       (job->result && job->result->outcome != "completed")) {
@@ -685,24 +415,24 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
   co_await http::async_write_header(
       stream, serializer, net::redirect_error(net::use_awaitable, ec));
   if (ec) {
-    admission.cancel(job, "client_write_failed");
+    admission.Cancel(job, "client_write_failed");
     co_return;
   }
   while (!client->closed && !job->request.cancelled->load()) {
-    if (auto chunk = job->pipe->front()) {
+    if (auto chunk = job->pipe->Front()) {
       stream.expires_after(std::chrono::milliseconds(options.write_ms));
       auto wire = http::make_chunk(net::buffer(*chunk));
       co_await net::async_write(stream, wire,
                                 net::redirect_error(net::use_awaitable, ec));
       if (ec) {
-        admission.cancel(job, "client_write_failed");
+        admission.Cancel(job, "client_write_failed");
         co_return;
       }
-      job->pipe->consumed();
+      job->pipe->Consume();
     } else if (job->result)
       break;
     else
-      co_await job->pipe->wait();
+      co_await job->pipe->Wait();
   }
   if (client->closed || job->request.cancelled->load()) co_return;
   if (task == Task::kLlm) {
@@ -748,13 +478,13 @@ int main(int argc, char** argv) {
   auto created = MakeFactory(options.runtime, options.fake);
   if (const auto* failure = std::get_if<Failure>(&created))
     return ServerError(failure->message);
-  auto slots =
-      PrepareSlots(options, *std::get<std::unique_ptr<Factory>>(created));
+  auto slots = PrepareSlots(
+      options.workers, *std::get<std::unique_ptr<Factory>>(created));
   if (const auto* failure = std::get_if<Failure>(&slots))
     return ServerError(failure->message);
   net::io_context io(1);
   auto work = net::make_work_guard(io);
-  Admission admission(io, options,
+  Admission admission(io, options.queue, options.earliest_deadline,
                       std::move(std::get<std::vector<Slot>>(slots)));
   Error socket_error;
   const auto address = net::ip::make_address(options.bind, socket_error);
@@ -780,7 +510,7 @@ int main(int argc, char** argv) {
     if (e) return;
     Error ignored;
     acceptor.close(ignored);
-    admission.shutdown();
+    admission.Shutdown();
     for (auto& [_, c] : clients) c->close();
   });
   auto serve_client =
@@ -792,7 +522,7 @@ int main(int argc, char** argv) {
       bool completed = false;
 
       ~Finish() {
-        if (!completed) admission.cancel(client.job, "internal_error");
+        if (!completed) admission.Cancel(client.job, "internal_error");
         client.close();
         clients.erase(&client);
       }
@@ -810,7 +540,7 @@ int main(int argc, char** argv) {
           std::cerr << "accept loop failed: " << e.message() << '\n';
           Error ignored;
           signals.cancel(ignored);
-          admission.shutdown();
+          admission.Shutdown();
           for (auto& [_, client] : clients) client->close();
         }
         break;
@@ -835,6 +565,6 @@ int main(int argc, char** argv) {
             << '\n'
             << std::flush;
   io.run();
-  std::cout << Json{{"shutdown", admission.snapshot()}}.dump() << '\n';
+  std::cout << Json{{"shutdown", admission.Snapshot()}}.dump() << '\n';
   return 0;
 }

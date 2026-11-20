@@ -7,6 +7,7 @@
 #include <limits>
 #include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -41,6 +42,45 @@ int main() {
   Check(GreedyArgmax(std::array{1.0f, nan, 2.0f}) == 2);
   Check(!GreedyArgmax({}));
   Check(!ParseSamplingMode("invalid"));
+
+  kvharbor::serving::RuntimeConfig config;
+  config.model_id = "qwen";
+  config.context = 128;
+  const Json chat = {
+      {"model", "qwen"},
+      {"max_tokens", 8},
+      {"messages", Json::array({{{"role", "user"}, {"content", "hello"}}})}};
+  auto parsed = kvharbor::serving::ParseTextInput(chat, config);
+  const auto& text = std::get<kvharbor::serving::TextInput>(parsed);
+  Check(text.apply_chat_template && text.max_tokens == 8 &&
+        text.messages.front().content == "hello");
+  const Json raw = {{"prompt", "hello"}, {"max_tokens", 8}};
+  Check(!std::get<kvharbor::serving::TextInput>(
+             kvharbor::serving::ParseTextInput(raw, config))
+             .apply_chat_template);
+  for (const auto& [key, value] : std::vector<std::pair<std::string, Json>>{
+           {"temperature", 1},
+           {"model", "other"},
+           {"max_tokens", 128},
+           {"messages", Json::array({{{"role", "tool"}, {"content", "x"}}})}}) {
+    auto invalid_chat = chat;
+    invalid_chat[key] = value;
+    Check(std::holds_alternative<Failure>(
+        kvharbor::serving::ParseTextInput(invalid_chat, config)));
+  }
+
+  // Queued requests must own their text after the wire JSON is destroyed.
+  kvharbor::serving::Request request;
+  {
+    Json body = chat;
+    body["messages"][0]["content"] = std::string(512, 'x');
+    request.input = kvharbor::serving::ParseTextRequest(body, config, false);
+    body["messages"][0]["content"] = "replaced";
+  }
+  auto queued_input =
+      kvharbor::serving::ReadRequestInput<kvharbor::serving::TextInput>(request);
+  auto output = std::get<const kvharbor::serving::TextInput*>(queued_input);
+  Check(output->messages.front().content == std::string(512, 'x'));
 
   Check(IntegerFieldOr(Json::object(), "max_tokens", 64) == 64);
   const int minimum = std::numeric_limits<int>::min();

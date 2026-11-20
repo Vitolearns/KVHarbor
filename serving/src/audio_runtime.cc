@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,12 +37,14 @@ ValueOrFailure<std::array<std::string, N>> ModelAssets(
 }
 
 class AsrRuntime final : public Runtime {
+  std::string model_id_;
   std::unique_ptr<const SherpaOnnxOfflineRecognizer,
                   decltype(&SherpaOnnxDestroyOfflineRecognizer)>
       engine_{nullptr, SherpaOnnxDestroyOfflineRecognizer};
 
  public:
-  explicit AsrRuntime(const std::array<std::string, 4>& assets) {
+  AsrRuntime(const std::array<std::string, 4>& assets, std::string model_id)
+      : model_id_(std::move(model_id)) {
     SherpaOnnxOfflineRecognizerConfig config{};
     config.model_config.num_threads = 2;
     config.model_config.provider = "cpu";
@@ -59,14 +62,17 @@ class AsrRuntime final : public Runtime {
   }
   bool IsReady() const { return engine_ != nullptr; }
   Json Info() const override {
-    return {{"backend", "sherpa-onnx"}, {"model", "Qwen3-ASR-0.6B-int8"},
+    return {{"backend", "sherpa-onnx"}, {"model", model_id_},
             {"device", "cpu"},          {"threads", 2},
             {"streaming", false},       {"cancel_mode", "after_native_decode"}};
   }
   Result Generate(const Request& r, const Emit&) override {
     Result result;
     auto phase = Clock::now();
-    auto decoded = ReadPcm16Wav(r.audio);
+    const auto parsed = ReadRequestInput<AsrInput>(r);
+    if (const auto* failure = std::get_if<Failure>(&parsed))
+      return FailedRequest(*failure);
+    auto decoded = ReadPcm16Wav(std::get<const AsrInput*>(parsed)->wav);
     if (const auto* failure = std::get_if<Failure>(&decoded))
       return FailedRequest(*failure);
     const auto& [rate, audio] = std::get<Waveform>(decoded);
@@ -189,13 +195,12 @@ class TtsRuntime final : public Runtime {
             {"model_native_streaming", false}};
   }
   Result Generate(const Request& r, const Emit& emit) override {
-    const auto* text = StringField(r.body, "input");
-    const auto speed = NumberFieldOr(r.body, "speed", 1.0);
-    const auto sid = IntegerFieldOr(r.body, "voice", 2);
-    if (!text || !speed || !sid)
-      return FailedRequest(InvalidRequest("invalid request fields"));
-    if (text->empty() || text->size() > 600 || !std::isfinite(*speed) ||
-        *speed < 0.6 || *speed > 1.6 || *sid < 0 || *sid >= speakers_)
+    const auto parsed = ReadRequestInput<TtsInput>(r);
+    if (const auto* failure = std::get_if<Failure>(&parsed))
+      return FailedRequest(*failure);
+    const auto& [text, speed, voice] = *std::get<const TtsInput*>(parsed);
+    if (text.empty() || text.size() > 600 || !std::isfinite(speed) ||
+        speed < 0.6 || speed > 1.6 || voice < 0 || voice >= speakers_)
       return FailedRequest(InvalidRequest("invalid TTS text, speed or voice"));
     Result result;
     if (IsStopped(r)) {
@@ -205,14 +210,14 @@ class TtsRuntime final : public Runtime {
     auto begin = Clock::now();
     Callback cb{r, emit, begin, 0, -1, false, sample_rate_};
     SherpaOnnxGenerationConfig config{};
-    config.sid = *sid;
-    config.speed = static_cast<float>(*speed);
+    config.sid = voice;
+    config.speed = static_cast<float>(speed);
     config.silence_scale = 0.2f;
     using Audio =
         std::unique_ptr<const SherpaOnnxGeneratedAudio,
                         decltype(&SherpaOnnxDestroyOfflineTtsGeneratedAudio)>;
     Audio audio(
-        SherpaOnnxOfflineTtsGenerateWithConfig(engine_.get(), text->c_str(),
+        SherpaOnnxOfflineTtsGenerateWithConfig(engine_.get(), text.c_str(),
                                                &config, Callback::Deliver, &cb),
         SherpaOnnxDestroyOfflineTtsGeneratedAudio);
     if (cb.failed)
@@ -246,7 +251,16 @@ ValueOrFailure<std::unique_ptr<Runtime>> MakeAsrRuntime(
       c.asr_dir, std::array{"conv_frontend.onnx", "encoder.int8.onnx",
                             "decoder.int8.onnx", "tokenizer"});
   if (const auto* failure = std::get_if<Failure>(&assets)) return *failure;
-  auto runtime = std::make_unique<AsrRuntime>(std::get<0>(assets));
+  std::string model_id = "Qwen3-ASR";
+  std::ifstream marker(c.asr_dir + "/.kvharbor-asset.json");
+  if (marker) {
+    const auto metadata = Json::parse(marker, nullptr, false);
+    const auto* id = StringField(metadata, "id");
+    if (!id || id->empty()) return BackendError("invalid ASR asset marker");
+    model_id = *id;
+  }
+  auto runtime =
+      std::make_unique<AsrRuntime>(std::get<0>(assets), std::move(model_id));
   if (!runtime->IsReady())
     return BackendError("failed to initialize Qwen3-ASR");
   return std::unique_ptr<Runtime>(std::move(runtime));
