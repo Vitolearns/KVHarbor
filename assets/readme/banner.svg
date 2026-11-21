@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 268" width="860" height="268"
+     xml:lang="en" role="img" aria-labelledby="banner-title banner-description"
+     font-family="system-ui, -apple-system, Segoe UI, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+  <title id="banner-title">KVHarbor</title>
+  <desc id="banner-description">A C++20 inference service. The HTTP API streams text via SSE, returns transcripts as JSON, and streams PCM16 speech.</desc>
+  <defs>
+    <pattern id="grid" width="22" height="22" patternUnits="userSpaceOnUse" x="435" y="30">
+      <path d="M22 0H0v22" fill="none" stroke="#294449"/>
+    </pattern>
+  </defs>
+  <rect x=".5" y=".5" width="859" height="267" rx="21" fill="#121f2b" stroke="#2f4750"/>
+  <text x="35" y="103" fill="#f2f9f8" font-size="65" font-weight="750" letter-spacing="-2.4">KVHarbor</text>
+  <text x="39" y="143" fill="#c2d7df" font-size="25" font-weight="550">Single-GPU inference service</text>
+  <path d="M39 167H391" stroke="#3b5862"/>
+  <text x="39" y="207" fill="#9ee5d0" font-size="22" font-weight="650">llama.cpp / TensorRT Edge-LLM</text>
+
+  <rect x="435" y="29" width="394" height="210" rx="14" fill="#162a32"/>
+  <rect x="435" y="29" width="394" height="210" rx="14" fill="url(#grid)" stroke="#3a555e"/>
+  <path d="M538 134h57m-31 0V83q0-11 11-11h20m-31 62v51q0 11 11 11h20
+           M590 67l5 5-5 5m0 52 5 5-5 5m0 52 5 5-5 5"
+        fill="none" stroke="#77beae" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="564" cy="134" r="4" fill="#9ee5d0" stroke="#162a32" stroke-width="1.5"/>
+  <rect x="456" y="112" width="82" height="44" rx="9" fill="#203f43" stroke="#51837b"/>
+  <text x="497" y="142" fill="#bdf1e3" text-anchor="middle" font-size="23" font-weight="700"
+        font-family="ui-monospace, SFMono-Regular, Consolas, monospace">HTTP</text>
+  <rect x="600" y="50" width="206" height="44" rx="9" fill="#21433e" stroke="#47776b"/>
+  <circle cx="619" cy="72" r="3.5" fill="#a5ebd1"/>
+  <text x="633" y="79" fill="#e9f5f3" font-size="22" font-weight="650">Text</text>
+  <text x="791" y="78" fill="#a5ebd1" text-anchor="end" font-size="20" font-weight="650" font-family="ui-monospace, SFMono-Regular, Consolas, monospace">SSE</text>
+  <rect x="600" y="112" width="206" height="44" rx="9" fill="#1d3137" stroke="#355158"/>
+  <circle cx="619" cy="134" r="3.5" fill="#b1d1ce"/>
+  <text x="633" y="141" fill="#e9f5f3" font-size="22" font-weight="650">ASR</text>
+  <text x="791" y="140" fill="#b1d1ce" text-anchor="end" font-size="20" font-weight="650" font-family="ui-monospace, SFMono-Regular, Consolas, monospace">JSON</text>
+  <rect x="600" y="174" width="206" height="44" rx="9" fill="#1d3137" stroke="#355158"/>
+  <circle cx="619" cy="196" r="3.5" fill="#b1d1ce"/>
+  <text x="633" y="203" fill="#e9f5f3" font-size="22" font-weight="650">TTS</text>
+  <text x="791" y="202" fill="#b1d1ce" text-anchor="end" font-size="20" font-weight="650" font-family="ui-monospace, SFMono-Regular, Consolas, monospace">PCM16</text>
+</svg>

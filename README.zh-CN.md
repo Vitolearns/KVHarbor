@@ -1,12 +1,17 @@
-<h1 align="center">KVHarbor</h1>
+<h1 align="center">
+  <img src="assets/readme/banner-zh.svg" width="860" alt="KVHarbor">
+</h1>
+
+<p align="center"><strong>一个 C++20 进程可同时提供 GPU 文本生成和 CPU 语音服务，语音也可单独启动。</strong></p>
+
+<p align="center">
+  <img src="assets/readme/badge-cpp.svg" alt="C++20">
+  <a href="LICENSE"><img src="assets/readme/badge-license.svg" alt="PolyForm Noncommercial 1.0.0"></a>
+</p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> · <a href="#运行真实模型">运行真实模型</a> · <a href="#架构">架构</a> · <a href="#单卡实测">单卡实测</a> · <a href="README.md">English</a>
 </p>
-
-KVHarbor 是一个单机 C++20 推理服务。启动时选 **llama.cpp** 或 **TensorRT Edge-LLM**，
-客户端都用同一套流式 HTTP 接口。KVHarbor 负责排队、输出缓冲和请求取消。
-**Qwen3-ASR** 和 **Kokoro** 用 CPU 做语音识别和合成，也可以单独启动。
 
 ## 快速开始
 

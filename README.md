@@ -1,13 +1,17 @@
-<h1 align="center">KVHarbor</h1>
+<h1 align="center">
+  <img src="assets/readme/banner.svg" width="860" alt="KVHarbor">
+</h1>
+
+<p align="center"><strong>One C++20 process serves GPU text generation and CPU speech. Speech can also run on its own.</strong></p>
+
+<p align="center">
+  <img src="assets/readme/badge-cpp.svg" alt="C++20">
+  <a href="LICENSE"><img src="assets/readme/badge-license.svg" alt="PolyForm Noncommercial 1.0.0"></a>
+</p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> · <a href="#run-real-models">Run real models</a> · <a href="#architecture">Architecture</a> · <a href="#benchmarks">Benchmarks</a> · <a href="README.zh-CN.md">简体中文</a>
 </p>
-
-KVHarbor serves text and speech from one C++20 process. Choose **llama.cpp** or
-**TensorRT Edge-LLM** at startup and send the same streaming HTTP request to
-either engine. KVHarbor handles queueing, output buffering, and cancellation.
-**Qwen3-ASR** and **Kokoro** run on the CPU and can serve speech on their own.
 
 ## Quick start
 
