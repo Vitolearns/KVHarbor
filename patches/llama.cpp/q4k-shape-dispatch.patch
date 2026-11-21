@@ -1,0 +1,34 @@
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -7,2 +7,3 @@
+ #include <cstdlib>
++#include <string_view>
+ #include <type_traits>
+@@ -1037,11 +1038,24 @@
+                 // Opt-in experiment for dense, fused Q4_K decode on SM120.
+                 if constexpr (type == GGML_TYPE_Q4_K) {
+                     if (cc == GGML_CUDA_CC_BLACKWELL && warp_size == 32 && !has_ids && fusion.gate != nullptr) {
+-                        static const bool two_warps = [] {
++                        enum class warp_mode { upstream, force_two, measured_shapes };
++                        static const warp_mode mode = [] {
+                             const char * value = std::getenv("KVHARBOR_CUDA_Q4K_WARPS");
+-                            return value && value[0] == '2' && value[1] == '\0';
++                            if (value && value[0] == '2' && value[1] == '\0') {
++                                return warp_mode::force_two;
++                            }
++                            if (value && std::string_view(value) == "auto") {
++                                return warp_mode::measured_shapes;
++                            }
++                            return warp_mode::upstream;
+                         }();
+-                        if (two_warps) {
++                        // Rows and reduction width for single-vector SwiGLU,
++                        // with a repeatable win in three paired SM120 runs.
++                        const bool measured_shape = nchannels_dst == 1 && nsamples_dst == 1 &&
++                            fusion.glu_op == GGML_GLU_OP_SWIGLU &&
++                            ((nrows_x == 8192 && (ncols_x == 4096 || ncols_x == 5120)) ||
++                             (nrows_x == 12288 && ncols_x == 4096));
++                        if (mode == warp_mode::force_two || (mode == warp_mode::measured_shapes && measured_shape)) {
+                             launch(std::false_type{}, std::false_type{}, std::integral_constant<int, 2>{});
+                             break;
+                         }

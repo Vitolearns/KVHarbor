@@ -17,7 +17,8 @@ from llama_runtime import ROOT, LOCK, atomic_json, digest
 from sampling_bench import Hardware
 from stream_bench import get_json, post_stream
 
-MODES = {"reference": (0, 4), "one-row": (1, 4), "two-warps": (0, 2)}
+MODES = {"reference": (0, 4), "one-row": (1, 4), "two-warps": (0, 2), "shape-dispatch": (0, "auto")}
+DEFAULT_MODES = ("reference", "one-row", "two-warps")
 
 
 def load_rows(path):
@@ -122,7 +123,7 @@ def main():
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--workload", type=Path, default=ROOT / "benchmarks/kvharbor_sampling.jsonl")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
+    parser.add_argument("--modes", nargs="+", choices=MODES, default=DEFAULT_MODES)
     parser.add_argument("--rounds", type=int, default=6)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--warmup", type=int, default=2)
@@ -140,7 +141,7 @@ def main():
         raise RuntimeError("The model does not match the locked benchmark weights")
     model_stat = (model.stat().st_size, model.stat().st_mtime_ns)
     build = ROOT / "build-serving-cuda"
-    engine = ROOT / "build-llama-perf003"
+    engine = ROOT / ("build-llama-q4k-shapes" if "shape-dispatch" in args.modes else "build-llama-perf003")
     engine_manifest = json.loads((engine / "kvharbor-perf003-build.json").read_text())
     exe = "kvharbor-server" if args.http else "kvharbor-runtime-bench"
     binary_sha = digest(build / exe)
