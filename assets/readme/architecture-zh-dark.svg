@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Title: architecture Pages: 1 -->
+<svg width="545pt" height="274pt"
+ viewBox="0.00 0.00 545.16 274.16" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.08 264.08)">
+<title>KVHarbor 服务架构</title>
+<!-- http -->
+<g id="node1" class="node">
+<title>http</title>
+<path fill="#152335" stroke="#4c6578" stroke-width="1.2" d="M334.5,-254C334.5,-254 189.5,-254 189.5,-254 183.5,-254 177.5,-248 177.5,-242 177.5,-242 177.5,-228 177.5,-228 177.5,-222 183.5,-216 189.5,-216 189.5,-216 334.5,-216 334.5,-216 340.5,-216 346.5,-222 346.5,-228 346.5,-228 346.5,-242 346.5,-242 346.5,-248 340.5,-254 334.5,-254"/>
+<text text-anchor="middle" x="262" y="-230.6" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">HTTP 接口</text>
+</g>
+<!-- admission -->
+<g id="node2" class="node">
+<title>admission</title>
+<path fill="#1b2d43" stroke="#4c6578" stroke-width="1.2" d="M430.5,-199C430.5,-199 93.5,-199 93.5,-199 87.5,-199 81.5,-193 81.5,-187 81.5,-187 81.5,-156 81.5,-156 81.5,-150 87.5,-144 93.5,-144 93.5,-144 430.5,-144 430.5,-144 436.5,-144 442.5,-150 442.5,-156 442.5,-156 442.5,-187 442.5,-187 442.5,-193 436.5,-199 430.5,-199"/>
+<text text-anchor="middle" x="262" y="-177.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">C++20 请求调度</text>
+<text text-anchor="middle" x="262" y="-157.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">任务队列 · 工作名额 · 取消请求</text>
+</g>
+<!-- http&#45;&gt;admission -->
+<g id="edge1" class="edge">
+<title>http&#45;&gt;admission</title>
+<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M262,-215.88C262,-212.69 262,-209.27 262,-205.81"/>
+<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="264.31,-205.75 262,-199.15 259.69,-205.75 264.31,-205.75"/>
+</g>
+<!-- text -->
+<g id="node3" class="node">
+<title>text</title>
+<path fill="#172f47" stroke="#4c6578" stroke-width="1.2" d="M244,-127C244,-127 12,-127 12,-127 6,-127 0,-121 0,-115 0,-115 0,-12 0,-12 0,-6 6,0 12,0 12,0 244,0 244,0 250,0 256,-6 256,-12 256,-12 256,-115 256,-115 256,-121 250,-127 244,-127"/>
+<text text-anchor="middle" x="128" y="-99.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">文本生成</text>
+<text text-anchor="middle" x="128" y="-79.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#a0ccf2">GPU · 文本队列</text>
+<text text-anchor="middle" x="128" y="-59.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">llama.cpp 或</text>
+<text text-anchor="middle" x="128" y="-39.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">TensorRT Edge&#45;LLM</text>
+<text text-anchor="middle" x="128" y="-19.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">SSE 文本流</text>
+</g>
+<!-- admission&#45;&gt;text -->
+<g id="edge2" class="edge">
+<title>admission&#45;&gt;text</title>
+<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M228.19,-143.75C223.24,-139.84 217.98,-135.68 212.55,-131.38"/>
+<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="213.68,-129.33 207.07,-127.05 210.81,-132.95 213.68,-129.33"/>
+</g>
+<!-- speech -->
+<g id="node4" class="node">
+<title>speech</title>
+<path fill="#183734" stroke="#4c6578" stroke-width="1.2" d="M513,-127C513,-127 281,-127 281,-127 275,-127 269,-121 269,-115 269,-115 269,-12 269,-12 269,-6 275,0 281,0 281,0 513,0 513,0 519,0 525,-6 525,-12 525,-12 525,-115 525,-115 525,-121 519,-127 513,-127"/>
+<text text-anchor="middle" x="397" y="-99.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">语音服务</text>
+<text text-anchor="middle" x="397" y="-79.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#a0d8c4">CPU · 转写与合成各有队列</text>
+<text text-anchor="middle" x="397" y="-59.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">sherpa&#45;onnx</text>
+<text text-anchor="middle" x="397" y="-39.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">Qwen3&#45;ASR → JSON</text>
+<text text-anchor="middle" x="397" y="-19.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">Kokoro → PCM16</text>
+</g>
+<!-- admission&#45;&gt;speech -->
+<g id="edge3" class="edge">
+<title>admission&#45;&gt;speech</title>
+<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M296.07,-143.75C301.05,-139.84 306.35,-135.68 311.82,-131.38"/>
+<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="313.58,-132.94 317.34,-127.05 310.72,-129.31 313.58,-132.94"/>
+</g>
+</g>
+</svg>

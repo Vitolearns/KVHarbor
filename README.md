@@ -4,14 +4,15 @@
   <a href="#quick-start">Quick start</a> · <a href="#run-real-models">Run real models</a> · <a href="#architecture">Architecture</a> · <a href="#benchmarks">Benchmarks</a> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-KVHarbor runs text generation, speech recognition, and speech synthesis in one
-C++20 server. Choose **llama.cpp** or **TensorRT Edge-LLM** for GPU text
-generation. **Qwen3-ASR** and **Kokoro** run on the CPU, alongside text or on
-their own.
+KVHarbor serves text and speech from one C++20 process. Choose **llama.cpp** or
+**TensorRT Edge-LLM** at startup and send the same streaming HTTP request to
+either engine. KVHarbor handles queueing, output buffering, and cancellation.
+**Qwen3-ASR** and **Kokoro** run on the CPU and can serve speech on their own.
 
 ## Quick start
 
-This Ubuntu 24.04 example runs on Linux or WSL2 with a CPU test backend. You can try the streaming API before downloading model weights.
+On Ubuntu 24.04, either natively or in WSL2, use the CPU test backend to try the
+streaming API without downloading model weights.
 
 ```bash
 sudo apt-get update
@@ -23,7 +24,7 @@ cmake --build build-serving-cpu --parallel 2
 ./build-serving-cpu/kvharbor-server --test-backend --port 18082
 ```
 
-With the server running, send a request from another terminal.
+Send a request from a second terminal.
 
 ```bash
 curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
@@ -31,7 +32,8 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true,"max_tokens":4}'
 ```
 
-The stream sends four content chunks and ends with `data: [DONE]`. Stop the server with Ctrl+C.
+Look for four content chunks followed by `data: [DONE]`. Press Ctrl+C in the
+server terminal to stop it.
 
 ## Run real models
 
@@ -39,32 +41,35 @@ The stream sends four content chunks and ends with `data: [DONE]`. Stop the serv
 <a name="tensorrt-edge-llm-text-generation"></a>
 <a name="enable-speech"></a>
 
-| Workload | Engine | Setup |
+| Task | Engine | Run it |
 | --- | --- | --- |
-| Text generation from GGUF | llama.cpp on GPU | [Run Qwen3.8-27B](docs/serving.md#cuda-text-generation) |
-| Text generation from a TensorRT engine | TensorRT Edge-LLM on GPU | [Run Qwen3.5-0.8B](docs/serving.md#tensorrt-edge-llm-text-generation) |
-| Transcription and speech synthesis | sherpa-onnx on CPU | [Run Qwen3-ASR and Kokoro](docs/serving.md#enable-speech) |
+| Text from GGUF | llama.cpp on GPU | [Qwen3.8-27B](docs/serving.md#cuda-text-generation) |
+| Text from a TensorRT engine | TensorRT Edge-LLM on GPU | [Qwen3.5-0.8B](docs/serving.md#tensorrt-edge-llm-text-generation) |
+| Transcribe audio or synthesize speech | sherpa-onnx on CPU | [Qwen3-ASR and Kokoro](docs/serving.md#enable-speech) |
 
 ## Architecture
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
-  <img src="assets/readme/architecture-light.svg" width="960" alt="HTTP ingress, separate task queues, runtime adapters, engines, and response formats">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
+    <img src="assets/readme/architecture-light.svg" width="680" alt="The C++ service routes HTTP requests to separate text, transcription, and synthesis queues. Text streams over SSE, transcription returns JSON, and synthesis returns PCM16.">
+  </picture>
+</p>
 
-Text, recognition, and synthesis have separate queues and worker slots. A
-disconnect cancels the request and wakes any worker blocked on output. For a
-running request, the slot becomes available again after the native call has
-finished. [Request lifecycle and engine notes](docs/serving.md#implementation-notes)
+When a client disconnects, KVHarbor signals cancellation and wakes workers
+waiting for room in the output buffer. An active worker releases its slot
+after the engine call returns. [Request lifecycle and engine notes](docs/serving.md#implementation-notes)
 
 ## Benchmarks
 
-These runs used Qwen3.8-27B Q4_K_M on an RTX 5090 Laptop GPU.
+These measurements come from one RTX 5090 Laptop GPU. The first two rows
+use Qwen3.8-27B Q4_K_M.
 
-- The [serving load test](docs/experiments/serving-acceptance.md) recorded 1,152
-  arrivals across three rates and checked overload and recovery separately.
-- [Reserving one logits row](docs/experiments/perf-003-gpu.md) cut the CUDA
-  workspace from 507 to 124 MiB and added about 5 ms to median HTTP completion.
+| Experiment | Result |
+| --- | --- |
+| [Serving load and recovery](docs/experiments/serving-acceptance.md) | 1,152 arrivals across three rates. At 0.4 req/s, the highest qualifying rate, at least 95% of arrivals met the latency SLO in every repeat. |
+| [Single-row logits workspace](docs/experiments/perf-003-gpu.md#results) | CUDA workspace fell from 507 to 124 MiB. Median HTTP completion took 5 ms longer. |
+| [Q4_K warp selection](docs/experiments/perf-003-gpu.md#shape-aware-q4_k-dispatch-on-sm120) | Three shapes ran faster in repeated GPU microbenchmarks. The profiled 27B calls used the four-warp fallback. |
 
 See also [prefill/decode interleaving](docs/experiments/prefill-decode.md) and
 [greedy sampling](docs/experiments/perf-002-sampling.md).
@@ -73,20 +78,21 @@ See also [prefill/decode interleaving](docs/experiments/prefill-decode.md) and
 
 | Task | Endpoint | Payload and response |
 | --- | --- | --- |
-| Text | `POST /v1/chat/completions`, `POST /v1/completions` | JSON request with `stream: true` and `temperature: 0`. Successful responses use SSE. |
-| Speech recognition | `POST /v1/audio/transcriptions` | Mono PCM16 WAV request with JSON transcript |
-| Speech synthesis | `POST /v1/audio/speech` | JSON request with raw PCM16 response and sample-rate header |
+| Text | `POST /v1/chat/completions`, `POST /v1/completions` | Send JSON with `stream: true` and `temperature: 0`. Read the text as SSE. |
+| Speech recognition | `POST /v1/audio/transcriptions` | Send mono PCM16 WAV and receive a JSON transcript. |
+| Speech synthesis | `POST /v1/audio/speech` | Send JSON and receive raw PCM16 with the sample rate in a response header. |
 | Service state | `GET /health`, `GET /state`, `GET /metrics`, `GET /v1/models` | Runtime health, task occupancy, Prometheus metrics and loaded models |
 
 ## Development
 
-Use the quick-start build to check the service. For source entry points and
-benchmark script checks, see [development notes](docs/serving.md#development).
+Run the service tests against the quick-start build.
 
 ```bash
 ctest --test-dir build-serving-cpu --output-on-failure
 python3 serving/tests/test_http.py build-serving-cpu/kvharbor-server
 ```
+
+[Source entry points and benchmark script tests](docs/serving.md#development)
 
 ## License
 
