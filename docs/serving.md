@@ -201,8 +201,8 @@ policy and its negative TTFT results remain part of the published experiment.
 
 The service entry points are [HTTP transport](../serving/src/server.cc),
 [task admission](../serving/src/admission.cc), and the
-[runtime interface](../serving/include/kvharbor/serving/runtime.h). The two SVG
-themes share this [Graphviz topology](../assets/readme/architecture.dot).
+[runtime interface](../serving/include/kvharbor/serving/runtime.h). The four README SVGs share one
+[diagram source](../scripts/render_readme_architecture.py).
 
 ```bash
 ctest --test-dir build-serving-cpu --output-on-failure

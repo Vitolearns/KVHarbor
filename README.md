@@ -52,7 +52,7 @@ server terminal to stop it.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
-    <img src="assets/readme/architecture-light.svg" width="680" alt="The C++ service routes HTTP requests to separate text, transcription, and synthesis queues. Text streams over SSE, transcription returns JSON, and synthesis returns PCM16.">
+    <img src="assets/readme/architecture-light.svg" width="720" alt="KVHarbor routes HTTP requests to separate text, transcription, and synthesis queues. Text uses either llama.cpp or TensorRT Edge-LLM and streams SSE. Qwen3-ASR returns JSON and Kokoro streams PCM16.">
   </picture>
 </p>
 

@@ -173,7 +173,7 @@ decode-first 在四组成对实验中降低了 TPOT p95，SLO goodput 持平或�
 
 源码入口包括 [HTTP 传输](../serving/src/server.cc)、[任务准入](../serving/src/admission.cc)
 和[运行时接口](../serving/include/kvharbor/serving/runtime.h)。
-两套主题图共用[拓扑源文件](../assets/readme/architecture.dot)。
+README 的四张架构图共用[绘图源文件](../scripts/render_readme_architecture.py)。
 
 ```bash
 ctest --test-dir build-serving-cpu --output-on-failure

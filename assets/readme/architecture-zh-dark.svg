@@ -1,61 +1,60 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
- "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<!-- Title: architecture Pages: 1 -->
-<svg width="545pt" height="274pt"
- viewBox="0.00 0.00 545.16 274.16" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(10.08 264.08)">
-<title>KVHarbor 服务架构</title>
-<!-- http -->
-<g id="node1" class="node">
-<title>http</title>
-<path fill="#152335" stroke="#4c6578" stroke-width="1.2" d="M334.5,-254C334.5,-254 189.5,-254 189.5,-254 183.5,-254 177.5,-248 177.5,-242 177.5,-242 177.5,-228 177.5,-228 177.5,-222 183.5,-216 189.5,-216 189.5,-216 334.5,-216 334.5,-216 340.5,-216 346.5,-222 346.5,-228 346.5,-228 346.5,-242 346.5,-242 346.5,-248 340.5,-254 334.5,-254"/>
-<text text-anchor="middle" x="262" y="-230.6" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">HTTP 接口</text>
-</g>
-<!-- admission -->
-<g id="node2" class="node">
-<title>admission</title>
-<path fill="#1b2d43" stroke="#4c6578" stroke-width="1.2" d="M430.5,-199C430.5,-199 93.5,-199 93.5,-199 87.5,-199 81.5,-193 81.5,-187 81.5,-187 81.5,-156 81.5,-156 81.5,-150 87.5,-144 93.5,-144 93.5,-144 430.5,-144 430.5,-144 436.5,-144 442.5,-150 442.5,-156 442.5,-156 442.5,-187 442.5,-187 442.5,-193 436.5,-199 430.5,-199"/>
-<text text-anchor="middle" x="262" y="-177.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">C++20 请求调度</text>
-<text text-anchor="middle" x="262" y="-157.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">任务队列 · 工作名额 · 取消请求</text>
-</g>
-<!-- http&#45;&gt;admission -->
-<g id="edge1" class="edge">
-<title>http&#45;&gt;admission</title>
-<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M262,-215.88C262,-212.69 262,-209.27 262,-205.81"/>
-<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="264.31,-205.75 262,-199.15 259.69,-205.75 264.31,-205.75"/>
-</g>
-<!-- text -->
-<g id="node3" class="node">
-<title>text</title>
-<path fill="#172f47" stroke="#4c6578" stroke-width="1.2" d="M244,-127C244,-127 12,-127 12,-127 6,-127 0,-121 0,-115 0,-115 0,-12 0,-12 0,-6 6,0 12,0 12,0 244,0 244,0 250,0 256,-6 256,-12 256,-12 256,-115 256,-115 256,-121 250,-127 244,-127"/>
-<text text-anchor="middle" x="128" y="-99.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">文本生成</text>
-<text text-anchor="middle" x="128" y="-79.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#a0ccf2">GPU · 文本队列</text>
-<text text-anchor="middle" x="128" y="-59.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">llama.cpp 或</text>
-<text text-anchor="middle" x="128" y="-39.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">TensorRT Edge&#45;LLM</text>
-<text text-anchor="middle" x="128" y="-19.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">SSE 文本流</text>
-</g>
-<!-- admission&#45;&gt;text -->
-<g id="edge2" class="edge">
-<title>admission&#45;&gt;text</title>
-<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M228.19,-143.75C223.24,-139.84 217.98,-135.68 212.55,-131.38"/>
-<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="213.68,-129.33 207.07,-127.05 210.81,-132.95 213.68,-129.33"/>
-</g>
-<!-- speech -->
-<g id="node4" class="node">
-<title>speech</title>
-<path fill="#183734" stroke="#4c6578" stroke-width="1.2" d="M513,-127C513,-127 281,-127 281,-127 275,-127 269,-121 269,-115 269,-115 269,-12 269,-12 269,-6 275,0 281,0 281,0 513,0 513,0 519,0 525,-6 525,-12 525,-12 525,-115 525,-115 525,-121 519,-127 513,-127"/>
-<text text-anchor="middle" x="397" y="-99.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5" font-weight="700">语音服务</text>
-<text text-anchor="middle" x="397" y="-79.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#a0d8c4">CPU · 转写与合成各有队列</text>
-<text text-anchor="middle" x="397" y="-59.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">sherpa&#45;onnx</text>
-<text text-anchor="middle" x="397" y="-39.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">Qwen3&#45;ASR → JSON</text>
-<text text-anchor="middle" x="397" y="-19.1" font-family="system-ui, sans-serif" font-size="18.00" fill="#e6eff5">Kokoro → PCM16</text>
-</g>
-<!-- admission&#45;&gt;speech -->
-<g id="edge3" class="edge">
-<title>admission&#45;&gt;speech</title>
-<path fill="none" stroke="#9ab3c4" stroke-width="1.5" d="M296.07,-143.75C301.05,-139.84 306.35,-135.68 311.82,-131.38"/>
-<polygon fill="#9ab3c4" stroke="#9ab3c4" stroke-width="1.5" points="313.58,-132.94 317.34,-127.05 310.72,-129.31 313.58,-132.94"/>
-</g>
-</g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" width="720" height="520"
+     xml:lang="zh-CN" role="img" aria-labelledby="diagram-title diagram-description" font-family="system-ui, -apple-system, Segoe UI, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+  <title id="diagram-title">KVHarbor 服务架构</title>
+  <desc id="diagram-description">C++20 HTTP 服务把请求分到各自的任务队列和工作线程。文本生成在启动时选择一个 GPU 后端，返回 SSE 文本流。CPU 语音识别返回 JSON，CPU 语音合成返回 PCM16 音频流。</desc>
+  <rect x=".5" y=".5" width="719" height="519" rx="24" fill="#141f24" stroke="#3d555b"/>
+  <path d="M24 1H696a23 23 0 0 1 23 23v107H1V24A23 23 0 0 1 24 1Z" fill="#203a39"/>
+  <rect x="27" y="37" width="57" height="57" rx="15" fill="#2e5350"/>
+  <path d="M40 65h9m0 0v-10q0-4 4-4h16M49 65h20M49 65v10q0 4 4 4h16
+           M65 47l4 4-4 4m0 6 4 4-4 4m0 6 4 4-4 4"
+        fill="none" stroke="#b2f3dd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="101" y="63" fill="#f1faf7" font-size="37" font-weight="750" letter-spacing="-.9">KVHarbor</text>
+  <text x="103" y="91" fill="#bbe6dc" font-size="21" font-weight="550">HTTP 接口 · C++20</text>
+  <path d="M365 38v56" fill="none" stroke="#6a918b"/>
+  <g fill="#f1faf7" font-size="21" font-weight="550">
+    <text x="393" y="59">请求准入 · 截止时间</text>
+    <text x="393" y="86">请求取消 · 输出背压</text>
+  </g>
+
+  <g fill="#b0c6c4" font-size="19" font-weight="650">
+    <text x="84" y="176">队列与工作线程</text>
+    <text x="296" y="176">推理后端</text>
+    <text x="557" y="176">HTTP 响应</text>
+  </g>
+  <rect x="67" y="200" width="628" height="127" rx="15" fill="#233b36" stroke="#456f63"/>
+  <rect x="67" y="341" width="628" height="70" rx="15" fill="#1c2c33" stroke="#3b5259"/>
+  <rect x="67" y="425" width="628" height="70" rx="15" fill="#1c2c33" stroke="#3b5259"/>
+  <g fill="none" stroke="#86b5ac" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M35 133v315"/>
+    <path d="M35 252q0 12 12 12h17m-5-5 5 5-5 5 M255 264h23m-5-5 5 5-5 5 M517 264h23m-5-5 5 5-5 5"/>
+    <path d="M35 364q0 12 12 12h17m-5-5 5 5-5 5 M255 376h23m-5-5 5 5-5 5 M517 376h23m-5-5 5 5-5 5"/>
+    <path d="M35 448q0 12 12 12h17m-5-5 5 5-5 5 M255 460h23m-5-5 5 5-5 5 M517 460h23m-5-5 5 5-5 5"/>
+  </g>
+  <circle cx="35" cy="131" r="4.5" fill="#86b5ac"/>
+
+  <g fill="#e8f3f0" font-size="23" font-weight="680">
+    <text x="84" y="272">文本生成</text>
+    <text x="84" y="384">语音识别</text>
+    <text x="84" y="468">语音合成</text>
+  </g>
+  <text x="296" y="226" fill="#a9ead1" font-size="18" font-weight="650">GPU · 启动时二选一</text>
+  <path d="M288 264h9m0-9h11m-11 0v40h11" fill="none" stroke="#86b5ac" stroke-width="1.5" stroke-linecap="round"/>
+  <g fill="#e8f3f0" font-size="21" font-weight="680">
+    <text x="319" y="262">llama.cpp</text>
+    <text x="319" y="302">TensorRT Edge-LLM</text>
+    <text x="296" y="369">Qwen3-ASR</text>
+    <text x="296" y="453">Kokoro</text>
+  </g>
+  <g fill="#b0c6c4" font-size="18">
+    <text x="296" y="393">sherpa-onnx · CPU</text>
+    <text x="296" y="477">sherpa-onnx · CPU</text>
+    <text x="557" y="288">文本流</text>
+    <text x="557" y="393">转写结果</text>
+    <text x="557" y="477">音频流</text>
+  </g>
+  <g fill="#a9ead1" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="22" font-weight="700">
+    <text x="557" y="264">SSE</text>
+    <text x="557" y="369">JSON</text>
+    <text x="557" y="453">PCM16</text>
+  </g>
 </svg>
