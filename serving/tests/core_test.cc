@@ -78,7 +78,8 @@ int main() {
     body["messages"][0]["content"] = "replaced";
   }
   auto queued_input =
-      kvharbor::serving::ReadRequestInput<kvharbor::serving::TextInput>(request);
+      kvharbor::serving::ReadRequestInput<kvharbor::serving::TextInput>(
+          request);
   auto output = std::get<const kvharbor::serving::TextInput*>(queued_input);
   Check(output->messages.front().content == std::string(512, 'x'));
 

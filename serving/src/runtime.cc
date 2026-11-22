@@ -185,7 +185,8 @@ RequestInput ParseTtsRequest(const Json& body) {
   const auto* text = StringField(body, "input");
   const auto speed = NumberFieldOr(body, "speed", 1.0);
   const auto voice = IntegerFieldOr(body, "voice", 2);
-  if (!text || !speed || !voice) return InvalidRequest("invalid request fields");
+  if (!text || !speed || !voice)
+    return InvalidRequest("invalid request fields");
   return TtsInput{*text, *speed, *voice};
 }
 

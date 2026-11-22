@@ -123,13 +123,13 @@ python3 scripts/perf003_bench.py --http --model "$GGUF_MODEL" \
   --output-dir results/raw/q4k-shape-http
 ```
 
-Compile [the sweep driver](../../benchmarks/q4k_shapes.cpp) against the
+Compile [the sweep driver](../../benchmarks/q4k_shapes.cc) against the
 GGML headers and libraries from that build. In the pinned CUDA container,
 mount the patched llama.cpp source at `/llama` and the experiment build at
 `/build`. Run the driver in a fresh CUDA process per warp setting.
 
 ```bash
-g++ -std=c++17 -O2 -I/llama/ggml/include q4k_shapes.cpp -L/build/bin \
+g++ -std=c++17 -O2 -I/llama/ggml/include q4k_shapes.cc -L/build/bin \
   -Wl,--allow-shlib-undefined -lggml -lggml-base -lggml-cpu -lggml-cuda -o q4k-shapes
 export LD_LIBRARY_PATH=/build/bin GGML_CUDA_DISABLE_GRAPHS=1
 KVHARBOR_CUDA_Q4K_WARPS=4 ./q4k-shapes

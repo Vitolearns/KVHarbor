@@ -226,16 +226,20 @@ std::string SseContent(const std::string& id, const std::string& text) {
 
 std::string Metrics(Json s) {
   std::string text;
-  for (auto key : {"accepted", "started", "rejected", "slot_releases",
-                   "active", "peak_buffer_bytes"})
+  for (auto key : {"accepted", "started", "rejected", "slot_releases", "active",
+                   "peak_buffer_bytes"}) {
     text += "kvharbor_" + std::string(key) + " " + s.at(key).dump() + "\n";
-  for (auto& [key, value] : s.at("outcomes").items())
+  }
+  for (auto& [key, value] : s.at("outcomes").items()) {
     text += "kvharbor_backend_outcomes_total{outcome=\"" + key + "\"} " +
             value.dump() + "\n";
-  for (auto& [task, value] : s.at("tasks").items())
-    for (auto key : {"active", "queued", "slots"})
-      text += "kvharbor_task_" + std::string(key) + "{task=\"" + task +
-              "\"} " + value.at(key).dump() + "\n";
+  }
+  for (auto& [task, value] : s.at("tasks").items()) {
+    for (auto key : {"active", "queued", "slots"}) {
+      text += "kvharbor_task_" + std::string(key) + "{task=\"" + task + "\"} " +
+              value.at(key).dump() + "\n";
+    }
+  }
   return text;
 }
 
@@ -478,8 +482,8 @@ int main(int argc, char** argv) {
   auto created = MakeFactory(options.runtime, options.fake);
   if (const auto* failure = std::get_if<Failure>(&created))
     return ServerError(failure->message);
-  auto slots = PrepareSlots(
-      options.workers, *std::get<std::unique_ptr<Factory>>(created));
+  auto slots = PrepareSlots(options.workers,
+                            *std::get<std::unique_ptr<Factory>>(created));
   if (const auto* failure = std::get_if<Failure>(&slots))
     return ServerError(failure->message);
   net::io_context io(1);

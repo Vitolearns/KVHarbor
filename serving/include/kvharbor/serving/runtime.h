@@ -86,8 +86,8 @@ struct TestInput {
   std::optional<int> chunk_bytes;
 };
 
-using RequestInput =
-    std::variant<std::monostate, TextInput, AsrInput, TtsInput, TestInput, Failure>;
+using RequestInput = std::variant<std::monostate, TextInput, AsrInput, TtsInput,
+                                  TestInput, Failure>;
 
 struct Request {
   Task task = Task::kLlm;
@@ -102,7 +102,8 @@ struct Request {
 template <typename Input>
 ValueOrFailure<const Input*> ReadRequestInput(const Request& request) {
   if (const auto* input = std::get_if<Input>(&request.input)) return input;
-  if (const auto* failure = std::get_if<Failure>(&request.input)) return *failure;
+  if (const auto* failure = std::get_if<Failure>(&request.input))
+    return *failure;
   return BackendError("worker received an unexpected request input type");
 }
 
@@ -143,7 +144,7 @@ struct RuntimeConfig {
 };
 
 ValueOrFailure<TextInput> ParseTextInput(const Json& body,
-                                       const RuntimeConfig& config);
+                                         const RuntimeConfig& config);
 RequestInput ParseTextRequest(const Json& body, const RuntimeConfig& config,
                               bool test_backend);
 RequestInput ParseTtsRequest(const Json& body);

@@ -50,8 +50,7 @@ Sampler MakeGreedyChain() {
 ValueOrFailure<std::string> FormatPrompt(const TextInput& input,
                                          const llama_model* model,
                                          bool model_template) {
-  if (!input.apply_chat_template)
-    return input.messages.front().content;
+  if (!input.apply_chat_template) return input.messages.front().content;
   std::vector<llama_chat_message> view;
   view.reserve(input.messages.size());
   for (const auto& msg : input.messages)
