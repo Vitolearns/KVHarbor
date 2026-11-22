@@ -52,6 +52,9 @@ static_assert(BOOST_VERSION >= 108300,
               "KVHarbor serving requires Boost 1.83 or newer");
 
 namespace {
+using kvharbor::serving::kMaxContextTokens;
+constexpr int kMaxRequestTimeoutMs = 30 * 60 * 1000;
+
 struct Options {
   RuntimeConfig runtime;
   std::string bind = "127.0.0.1";
@@ -80,7 +83,9 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
   };
   int output_rows = 0;
   const std::array numbers{
-      NumericOption{"--context", o.runtime.context, 128, 32768},
+      NumericOption{"--context", o.runtime.context, 128, kMaxContextTokens},
+      NumericOption{"--max-output-tokens", o.runtime.max_output_tokens, 0,
+                    kMaxContextTokens - 1},
       NumericOption{"--threads", o.runtime.threads, 1, 128},
       NumericOption{"--gpu-layers", o.runtime.gpu_layers, 0, 999},
       NumericOption{"--batch", o.runtime.batch, 1, 4096},
@@ -90,7 +95,7 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
       NumericOption{"--workers", o.workers, 1, 16},
       NumericOption{"--queue", o.queue, 0, 256},
       NumericOption{"--max-connections", o.connections, 1, 4096},
-      NumericOption{"--timeout-ms", o.timeout_ms, 10, 300000},
+      NumericOption{"--timeout-ms", o.timeout_ms, 10, kMaxRequestTimeoutMs},
       NumericOption{"--stream-buffer-bytes", o.buffer_bytes, 1024, 1024 * 1024},
       NumericOption{"--write-timeout-ms", o.write_ms, 10, 30000},
   };
@@ -111,6 +116,10 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
     const std::string_view argument = argv[i];
     if (argument == "--reuse-context") {
       o.runtime.reuse_context = true;
+      continue;
+    }
+    if (argument == "--kv-cache-q8") {
+      o.runtime.kv_cache_q8_0 = true;
       continue;
     }
     if (argument == "--model-chat-template" ||
@@ -173,6 +182,11 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
   }
   if (o.runtime.prefill_chunk > o.runtime.batch)
     return InvalidRequest("prefill chunk cannot exceed batch size");
+  if (o.runtime.max_output_tokens >= o.runtime.context)
+    return InvalidRequest("max output tokens must be smaller than context");
+  if (o.runtime.kv_cache_q8_0 &&
+      o.runtime.text_backend != kvharbor::serving::TextBackend::kLlama)
+    return InvalidRequest("Q8_0 KV cache requires the llama.cpp backend");
   o.runtime.max_output_rows = static_cast<std::uint32_t>(output_rows);
   return o;
 }
@@ -265,7 +279,11 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
     std::string body, type = "application/json";
     auto status = http::status::ok;
     if (req.target() == "/health")
-      body = Json{{"status", "ok"}, {"runtimes", admission.Info()}}.dump();
+      body = Json{{"status", "ok"},
+                  {"runtimes", admission.Info()},
+                  {"max_output_tokens", options.runtime.max_output_tokens},
+                  {"request_timeout_ms", options.timeout_ms}}
+                 .dump();
     else if (req.target() == "/state")
       body = admission.Snapshot().dump();
     else if (req.target() == "/metrics") {
@@ -316,7 +334,7 @@ net::awaitable<void> serve(std::shared_ptr<Client> client, net::io_context& io,
   if (timeout_header != req.end()) {
     const auto value = ParseInteger(
         {timeout_header->value().data(), timeout_header->value().size()}, 10,
-        300000);
+        kMaxRequestTimeoutMs);
     valid = value.has_value();
     if (value) timeout = std::min(timeout, *value);
   }

@@ -131,6 +131,11 @@ class LlamaRuntime final : public Runtime {
     params.n_seq_max = 1;
     // This adapter requests only the last logits row in each decode call.
     params.n_outputs_max = config_.max_output_rows;
+    if (config_.kv_cache_q8_0) {
+      params.type_k = GGML_TYPE_Q8_0;
+      params.type_v = GGML_TYPE_Q8_0;
+      params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    }
     params.n_threads = config_.threads;
     params.n_threads_batch = config_.threads;
     params.abort_callback = abort;
@@ -170,6 +175,7 @@ class LlamaRuntime final : public Runtime {
          config_.model_chat_template ? "model" : "qwen3-nonthinking"},
         {"model", config_.model_id},
         {"context", config_.context},
+        {"kv_cache_type", config_.kv_cache_q8_0 ? "q8_0" : "f16"},
         {"threads", config_.threads},
         {"gpu_layers", config_.gpu_layers},
         {"batch", config_.batch},
@@ -427,8 +433,9 @@ class LlamaRuntime final : public Runtime {
 }  // namespace
 ValueOrFailure<TextWorkerBuilder> LoadLlamaBackend(
     const RuntimeConfig& config) {
-  if (config.context < 128 || config.context > 32768 || config.batch < 1 ||
-      config.threads < 1)
+  if (config.context < 128 ||
+      config.context > kvharbor::serving::kMaxContextTokens ||
+      config.batch < 1 || config.threads < 1)
     return InvalidRequest("invalid native runtime configuration");
   if (config.prefill_chunk < 0 || config.prefill_chunk > config.batch)
     return InvalidRequest("prefill chunk cannot exceed batch size");

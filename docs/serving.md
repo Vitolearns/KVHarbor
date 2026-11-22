@@ -60,15 +60,20 @@ curl -fsSN http://127.0.0.1:8082/v1/chat/completions \
 
 Complete the [build prerequisites](#build-prerequisites) first.
 Install the TensorRT Edge-LLM SDK specified in the [runtime lock](../configs/runtime/edge-llm.json).
-Place a Qwen3.5-0.8B engine built with that SDK for your target GPU in
-`models/qwen3.5-0.8b-edge`. The preparation script downloads and verifies the
-matching checkpoint. The launcher mounts the repository at `/workspace`.
+The reference text engine uses Qwen3.5-0.8B, one sequence, up to 1,024 input
+tokens and a 2,048-token KV cache. Install the SDK's ONNX export dependencies
+for `trtedge export`. Build on the GPU that will serve the engine. If the build
+image needs extra TensorRT builder resources, set `KVHARBOR_TRT_BUILDER_LIB_DIR`
+to the directory containing the matching libraries. The launcher mounts the
+repository at `/workspace`.
 
 Stop the running text server before switching backends.
 
 ```bash
 python3 scripts/prepare_pc_model.py Qwen3.5-0.8B
 export KVHARBOR_EDGE_SDK=/absolute/path/to/edge-llm-sdk
+trtedge export models/qwen3.5-0.8b .cache/qwen3.5-edge-onnx --skip-visual --skip-audio
+bash scripts/build_pc_edge_engine.sh .cache/qwen3.5-edge-onnx/llm
 bash scripts/native_serving.sh build
 
 bash scripts/native_serving.sh serve --text-backend tensorrt-edge-llm \

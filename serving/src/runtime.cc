@@ -126,14 +126,20 @@ const std::string* StringField(const Json& body, const char* name) {
 }
 
 ValueOrFailure<TextInput> ParseTextInput(const Json& body,
-                                         const RuntimeConfig& config) {
-  const auto tokens = IntegerFieldOr(body, "max_tokens", 64);
+                                        const RuntimeConfig& config) {
+  const int default_tokens =
+      config.max_output_tokens > 0 && config.max_output_tokens < 64
+          ? config.max_output_tokens
+          : 64;
+  const auto tokens = IntegerFieldOr(body, "max_tokens", default_tokens);
   const auto temperature = NumberFieldOr(body, "temperature", 0.0);
   if (!body.is_object() || !tokens || !temperature)
     return InvalidRequest("invalid request fields");
   if (*tokens < 1 || *tokens >= config.context || *temperature != 0.0)
     return InvalidRequest(
         "native adapter requires temperature=0 and a bounded max_tokens");
+  if (config.max_output_tokens > 0 && *tokens > config.max_output_tokens)
+    return InvalidRequest("max_tokens exceeds the configured output limit");
   if (body.contains("model")) {
     const auto* model = StringField(body, "model");
     if (!model) return InvalidRequest("invalid request fields");

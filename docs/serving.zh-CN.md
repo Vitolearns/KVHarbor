@@ -57,15 +57,18 @@ curl -fsSN http://127.0.0.1:8082/v1/chat/completions \
 
 先完成[构建准备](#构建准备)，然后安装
 [运行时清单](../configs/runtime/edge-llm.json)指定版本的 TensorRT Edge-LLM SDK。
-用同一 SDK 为目标 GPU 构建 Qwen3.5-0.8B 引擎，将引擎目录放在
-`models/qwen3.5-0.8b-edge`。准备脚本会下载并校验对应的 checkpoint。
-启动脚本将仓库挂载到容器内的 `/workspace`。
+参考文本引擎使用 Qwen3.5-0.8B，单序列最多输入 1,024 个 token，KV 缓存容量为 2,048 个 token。
+安装 SDK 的 ONNX 导出依赖以使用 `trtedge export`，再在实际提供推理的 GPU 上构建引擎。
+若镜像缺少对应版本和架构的 TensorRT builder 库，可通过 `KVHARBOR_TRT_BUILDER_LIB_DIR`
+指定其所在目录。启动脚本将仓库挂载到容器内的 `/workspace`。
 
 切换后端前，先停止正在运行的文本服务。
 
 ```bash
 python3 scripts/prepare_pc_model.py Qwen3.5-0.8B
 export KVHARBOR_EDGE_SDK=/absolute/path/to/edge-llm-sdk
+trtedge export models/qwen3.5-0.8b .cache/qwen3.5-edge-onnx --skip-visual --skip-audio
+bash scripts/build_pc_edge_engine.sh .cache/qwen3.5-edge-onnx/llm
 bash scripts/native_serving.sh build
 
 bash scripts/native_serving.sh serve --text-backend tensorrt-edge-llm \

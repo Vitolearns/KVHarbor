@@ -119,6 +119,8 @@ struct Result {
 Result FailedRequest(Failure failure);
 
 enum class EngineSchedule { kOff, kFifo, kDecodeFirst };
+inline constexpr int kMaxContextTokens = 262144;
+
 enum class TextBackend { kLlama, kEdgeLlm, kNone };
 std::optional<TextBackend> ParseTextBackend(std::string_view value);
 
@@ -126,11 +128,13 @@ struct RuntimeConfig {
   std::string model;
   std::string model_id = "Qwen3.8-27B-Q4_K_M";
   int context = 2048;
+  int max_output_tokens = 0;
   int threads = 4;
   int gpu_layers = 99;
   int batch = 512;
   std::uint32_t max_output_rows = 0;
   bool reuse_context = false;
+  bool kv_cache_q8_0 = false;
   SamplingMode sampling = SamplingMode::kDirect;
   std::string asr_dir;
   std::string tts_dir;
