@@ -2,12 +2,7 @@
   <img src="assets/readme/banner-zh.svg" width="860" alt="KVHarbor">
 </h1>
 
-<p align="center"><strong>一个 C++20 进程可同时提供 GPU 文本生成和 CPU 语音服务，语音也可单独启动。</strong></p>
-
-<p align="center">
-  <img src="assets/readme/badge-cpp.svg" alt="C++20">
-  <a href="LICENSE"><img src="assets/readme/badge-license.svg" alt="PolyForm Noncommercial 1.0.0"></a>
-</p>
+<p align="center"><strong>单进程 C++20 推理服务，提供 GPU 文本生成和 CPU 语音识别、合成。</strong></p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> · <a href="#运行真实模型">运行真实模型</a> · <a href="#架构">架构</a> · <a href="#单卡实测">单卡实测</a> · <a href="README.md">English</a>
@@ -24,13 +19,13 @@ git clone https://github.com/Vitolearns/KVHarbor.git
 cd KVHarbor
 cmake -S serving -B build-serving-cpu -DCMAKE_BUILD_TYPE=Release
 cmake --build build-serving-cpu --parallel 2
-./build-serving-cpu/kvharbor-server --test-backend --port 18082
+./build-serving-cpu/kvharbor-server --test-backend --port 18080
 ```
 
 另开一个终端发送请求。
 
 ```bash
-curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
+curl -fsSN http://127.0.0.1:18080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true,"max_tokens":4}'
 ```
@@ -49,6 +44,8 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
 | 用 TensorRT 引擎生成文本 | TensorRT Edge-LLM（GPU） | [Qwen3.5-0.8B](docs/serving.zh-CN.md#tensorrt-edge-llm-文本生成) |
 | 语音转写和合成 | sherpa-onnx（CPU） | [Qwen3-ASR 和 Kokoro](docs/serving.zh-CN.md#启用语音) |
 
+[交互演示：切换文本引擎、语音转写与合成](docs/serving.zh-CN.md#交互演示)
+
 ## 架构
 
 <p align="center">
@@ -58,42 +55,25 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
   </picture>
 </p>
 
-客户端断开后，KVHarbor 会发出取消信号，并唤醒因输出缓冲区已满而阻塞的 worker。
-正在跑推理的 worker 会等引擎调用返回，再把名额交给下一个请求。
-[请求生命周期和引擎细节](docs/serving.zh-CN.md#实现细节)
+[运行时与请求生命周期](docs/serving.zh-CN.md#实现细节)
 
 ## 单卡实测
 
-以下实验用的是同一块 RTX 5090 Laptop GPU。前两项使用 Qwen3.8-27B Q4_K_M。
+RTX 5090 Laptop GPU，Qwen3.8-27B Q4_K_M。
 
-| 实验 | 实测结果 |
+| 实验 | 结果与范围 |
 | --- | --- |
-| [服务容量和恢复](docs/experiments/serving-acceptance.md) | 三档共 1,152 次到达。每轮都至少有 95% 请求达标的最高已测档位是 0.4 请求/秒。 |
-| [单行 logits 工作区](docs/experiments/perf-003-gpu.md#results) | CUDA 工作区从 507 MiB 降到 124 MiB，HTTP 请求完成耗时的中位数增加 5 ms。 |
-| [Q4_K 按形状选择 warp](docs/experiments/perf-003-gpu.md#shape-aware-q4_k-dispatch-on-sm120) | 三个形状在多轮 GPU 微基准中均有改善。27B 轨迹里的相关调用使用 4-warp 回退路径。 |
+| [服务容量](docs/experiments/serving-acceptance.md) | 1,152 次到达，0.4 请求/秒在三轮中均达到 95% SLO 达标率。 |
+| [单行 logits](docs/experiments/perf-003-gpu.md#results) | CUDA 工作区 507 → 124 MiB，HTTP 完成耗时中位数增加 5 ms。 |
+| [贪心采样](docs/experiments/perf-002-sampling.md) | 采样耗时中位数 461 → 108 µs/token，HTTP 完成耗时中位数降低 0.55%。 |
 
-其他实验见 [prefill/decode 交错](docs/experiments/prefill-decode.md)和
-[贪心采样](docs/experiments/perf-002-sampling.md)。
-
-## API
-
-| 任务 | 接口 | 请求与响应 |
-| --- | --- | --- |
-| 文本生成 | `POST /v1/chat/completions`、`POST /v1/completions` | 发送含 `stream: true` 和 `temperature: 0` 的 JSON，接收 SSE 文本流。 |
-| 语音识别 | `POST /v1/audio/transcriptions` | 发送单声道 PCM16 WAV，接收 JSON 转写。 |
-| 语音合成 | `POST /v1/audio/speech` | 发送 JSON，接收裸 PCM16。采样率在响应头里。 |
-| 服务状态 | `GET /health`、`GET /state`、`GET /metrics`、`GET /v1/models` | 运行状态、任务占用、Prometheus 指标和已加载模型 |
+其他实验见 [prefill/decode 调度](docs/experiments/prefill-decode.md)和 [Q4_K 形状分派](docs/experiments/perf-003-gpu.md#shape-aware-q4_k-dispatch-on-sm120)。
 
 ## 开发
 
-用快速开始的构建跑服务测试。
+<a name="api"></a>
 
-```bash
-ctest --test-dir build-serving-cpu --output-on-failure
-python3 serving/tests/test_http.py build-serving-cpu/kvharbor-server
-```
-
-[源码入口和压测脚本测试](docs/serving.zh-CN.md#开发)
+[API 与请求格式](docs/serving.zh-CN.md#api) · [源码入口与测试](docs/serving.zh-CN.md#开发)
 
 ## 许可
 

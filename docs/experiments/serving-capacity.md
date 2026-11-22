@@ -1,26 +1,9 @@
 # Single-worker HTTP capacity and overload recovery
 
-The [request-level dataset](../../results/experiments/serving-capacity.json)
-was collected from KVHarbor's CUDA HTTP/SSE service on a single RTX 5090
-Laptop GPU. The [model and llama.cpp revision](../../configs/runtime/llama.json)
-were locked, the weight checksum was verified, and the dataset records the
-serving binary and source file digests used for this run.
-
-## Setup
-
-One text worker, FIFO admission, eight queue entries, an 8 s server deadline,
-2,048 context tokens, a 512-token batch, four CPU threads, reused context,
-direct greedy sampling and one output row. The client used three warm-ups and
-24 measured requests per run, cycling over the published
-[mixed-length workload](../../benchmarks/kvharbor_text_mixed.jsonl). The three
-arrival rates were offered as Poisson arrivals with seeds 41 and 42. The
-rate order was reversed in the second repeat.
-
-The SLO requires a completed response and client-observed TTFT at most
-2,000 ms and TPOT at most 75 ms. Completed responses with one or zero
-generated tokens use the TTFT check alone when TPOT is unavailable.
-Goodput is SLO-compliant requests divided by the observed run duration.
-Percentiles use nearest rank over completed requests with a recorded value.
+This initial sweep used 24 requests per run on an RTX 5090 Laptop GPU with the
+locked 27B model. A later sweep uses three 128-request runs per rate.
+[Dataset](../../results/experiments/serving-capacity.json) ·
+[Runtime lock](../../configs/runtime/llama.json) · [Repeated sweep](serving-acceptance.md)
 
 ## Measurements
 
@@ -47,21 +30,50 @@ released counts agreed. The recovery field in the JSON measures polling
 time after the client has finished observing the burst. This is a bounded
 overload test.
 
+<details>
+<summary>Setup and replay</summary>
+
+## Setup
+
+One text worker, FIFO admission, eight queue entries, an 8 s server deadline,
+2,048 context tokens, a 512-token batch, four CPU threads, reused context,
+direct greedy sampling and one output row. The client used three warm-ups and
+24 measured requests per run, cycling over the published
+[mixed-length workload](../../benchmarks/kvharbor_text_mixed.jsonl). The three
+arrival rates were offered as Poisson arrivals with seeds 41 and 42. The
+rate order was reversed in the second repeat.
+
+The SLO requires a completed response and client-observed TTFT at most
+2,000 ms and TPOT at most 75 ms. Completed responses with one or zero
+generated tokens use the TTFT check alone when TPOT is unavailable.
+Goodput is SLO-compliant requests divided by the observed run duration.
+Percentiles use nearest rank over completed requests with a recorded value.
+
 ## Replay
 
-Complete the [CUDA build](../../README.md#cuda-text-generation), set MODEL_ID to the
-locked model ID, and run the service in one Bash terminal.
+Complete the [CUDA build](../serving.md#cuda-text-generation), then start the
+single-worker service in one Bash terminal.
 
 ```bash
+unset KVHARBOR_EDGE_SDK KVHARBOR_AUDIO KVHARBOR_SERVING_BUILD_DIR
+export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
 bash scripts/native_serving.sh serve --workers 1 --context 2048 --batch 512 \
   --threads 4 --gpu-layers 99 --reuse-context --sampling direct --max-output-rows 1 \
   --queue 8 --timeout-ms 8000 --policy fifo
 ```
 
-In another terminal, set BASE_URL to the running service and use a new output
-directory.
+In another terminal, explicitly select 24 requests and two repeats. The current
+driver defaults to 128 and three. It records schema-2 arrival-based SLO results
+in `$run/capacity/report.json`. The historical table above keeps its collected
+protocol and fingerprints.
 
 ```bash
-python3 scripts/capacity_bench.py --url "$BASE_URL" --model "$MODEL_ID" \
-  --output-dir results/raw/replay-serving-capacity
+mkdir -p results/raw
+run=$(mktemp -d "$PWD/results/raw/replay-serving-capacity.XXXXXX")
+python3 scripts/capacity_bench.py --url http://127.0.0.1:8082 \
+  --model Qwen3.8-27B-Q4_K_M --rates 0.4 0.8 1.6 --requests 24 --repeats 2 \
+  --burst-count 24 --server-binary build-serving-cuda/kvharbor-server \
+  --model-file models/Qwen3.8-27B-Q4_K_M.gguf --output-dir "$run/capacity"
 ```
+
+</details>

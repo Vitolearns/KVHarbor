@@ -1,23 +1,20 @@
 # Interleaving prefill and decode
 
-KVHarbor can dispatch the text worker's real llama.cpp prefill chunks and
-decode steps through a shared queue. Each worker owns a separate single-sequence
-context. The experimental decode-first order lets up to four decodes run while
-a prefill is queued, then gives the oldest waiting prefill a turn.
-The permit covers the engine call and synchronization. Streaming and
-sampling stay on the request's worker. A cancelled waiter leaves the queue
-before it acquires the permit.
+Decode-first lowered TPOT p95 by 9.0%–19.0% in four paired runs. TTFT p95 improved
+in one pair, and SLO goodput stayed flat or decreased. The policy is opt-in.
+
+Each worker owns a single-sequence context. A shared queue permits up to four
+decode calls ahead of a waiting prefill, then serves the oldest prefill.
+The permit covers native execution and synchronization.
 
 ## Controlled comparison
 
-Both orders used three text workers, FIFO request admission, 2,048 context
-tokens, 64-token prefill chunks, direct greedy sampling and one reserved
-logits row. They used the same CUDA binary, 27B weights and
-[mixed-length fixtures](../../benchmarks/kvharbor_text_mixed.jsonl). Each mode
-ran two repeats at 1.6 and 3.2 offered requests/s, using the same Poisson
-seeds and 24 requests per run. The setting for engine dispatch order was
-the only intended difference. The SLO and percentile definitions are in
-the [single-worker report](serving-capacity.md).
+Three workers used the same CUDA binary, locked 27B weights, 2,048-token contexts
+and 64-token prefill chunks. Each engine order ran two 24-request repeats at
+1.6 and 3.2 offered req/s.
+
+<details>
+<summary>Per-run latency and outcomes</summary>
 
 | Offered req/s | Repeat | Engine order | TTFT p95 / p99 (ms) | TPOT p95 (ms) | Goodput req/s | Completed / 429 / incomplete SSE | Server deadline |
 | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
@@ -30,47 +27,62 @@ the [single-worker report](serving-capacity.md).
 | 3.2 | 2 | fifo | 5915 / 5915 | 95.8 | 0.087 | 12 / 9 / 3 | 3 |
 | 3.2 | 2 | decode-first | 6893 / 6893 | 86.3 | 0.084 | 13 / 9 / 2 | 2 |
 
-Decode-first reduced TPOT p95 by 9.0% to 19.0% across the four paired runs. TTFT p95 improved in 1 of four pairs. SLO goodput did not increase in these runs. The decode-first mode is opt-in. The rates in this
-experiment create substantially more contention than the single-worker SLO
-baseline, and the percentiles describe only completed requests. The server
-deadline column includes requests whose HTTP 200 stream ended before
-[DONE], as well as any explicit deadline responses. These counts use the
-server's terminal records.
+Percentiles cover completed requests. Server deadlines also count HTTP-200
+streams interrupted before [DONE].
+
+</details>
 
 ## Correctness and dispatch evidence
 
-The [request-level dataset](../../results/experiments/prefill-decode.json)
-contains the workload and binary fingerprints, per-run outcomes, and
-paired output digests. 63 requests completed in both members of the
-same pair with identical output digests and token usage. Across the
-measured runs and bursts, the decode-first terminal records include
-528 decodes selected ahead of a waiting prefill and 159 prefills
-selected after the decode limit. The release test disconnected a real
-client after its first streamed content, observed one terminal outcome and
-one worker release, and completed a subsequent request. The
-[C++ test](../../serving/tests/engine_schedule_test.cc) covers FIFO order,
-decode priority, the prefill bound, and cancellation while waiting.
+All 63 requests completed in both arms of a pair matched in output digest and
+token usage. Traces recorded 528 decodes ahead of a waiting prefill and 159
+prefills selected after the decode limit. A disconnect released one worker
+and a subsequent request completed.
+[Dataset](../../results/experiments/prefill-decode.json)
+
+FIFO order, decode priority, the prefill bound and cancellation while waiting
+are covered by the [C++ test](../../serving/tests/engine_schedule_test.cc).
+
+<details>
+<summary>Setup, replay and measured source</summary>
+
+Both orders used three text workers, FIFO request admission, 2,048 context
+tokens, 64-token prefill chunks, direct greedy sampling and one reserved
+logits row. They used the same CUDA binary, 27B weights and
+[mixed-length fixtures](../../benchmarks/kvharbor_text_mixed.jsonl). Each mode
+ran two repeats at 1.6 and 3.2 offered requests/s, using the same Poisson
+seeds and 24 requests per run. The setting for engine dispatch order was
+the only intended difference. The SLO and percentile definitions are in
+the [single-worker report](serving-capacity.md).
 
 ## Replay
 
-Use the [CUDA build](../../README.md#cuda-text-generation) and run each mode on the
+Use the [CUDA build](../serving.md#cuda-text-generation) and run each mode on the
 same GPU with the same environment. Set ENGINE_ORDER to fifo or decode-first.
 
 ```bash
-bash scripts/native_serving.sh serve --workers 3 --context 2048 --batch 512 \
+unset KVHARBOR_EDGE_SDK KVHARBOR_AUDIO KVHARBOR_SERVING_BUILD_DIR
+export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
+ENGINE_ORDER=fifo
+bash scripts/native_serving.sh serve --port 8083 --workers 3 --context 2048 --batch 512 \
   --threads 4 --gpu-layers 99 --reuse-context --sampling direct --max-output-rows 1 \
-  --queue 8 --timeout-ms 8000 --policy fifo --prefill-chunk 64 --engine-schedule "$ENGINE_ORDER"
+  --queue 8 --timeout-ms 8000 --policy fifo \
+  --prefill-chunk 64 --engine-schedule "$ENGINE_ORDER"
 ```
 
-In another Bash terminal, set BASE_URL and MODEL_ID to match the running
-service. Use a fresh output directory per mode.
+In another Bash terminal, run the client below. Then restart the server and
+repeat with `ENGINE_ORDER=decode-first` in both terminals. Each output directory
+contains `report.json`. Current replays use schema-2 arrival-based SLO accounting.
 
 ```bash
-python3 scripts/capacity_bench.py --url "$BASE_URL" --model "$MODEL_ID" \
-  --rates 1.6 3.2 --requests 24 --repeats 2 --burst-count 18 \
-  --output-dir "results/raw/replay-prefill-$ENGINE_ORDER"
+ENGINE_ORDER=fifo
+mkdir -p results/raw
+run=$(mktemp -d "$PWD/results/raw/replay-prefill.XXXXXX")
+python3 scripts/capacity_bench.py --url http://127.0.0.1:8083 \
+  --model Qwen3.8-27B-Q4_K_M --rates 1.6 3.2 --requests 24 --repeats 2 --burst-count 18 \
+  --server-binary build-serving-cuda/kvharbor-server \
+  --model-file models/Qwen3.8-27B-Q4_K_M.gguf --output-dir "$run/$ENGINE_ORDER"
 ```
-
 
 ## Measured source snapshot
 
@@ -85,3 +97,5 @@ workload inputs. Its SHA-256 is recorded in the dataset's `source_snapshot`.
 The current service has additional started-worker accounting and runtime
 configuration fields. Those additions do not relabel these historical
 measurements as runs of the current binary.
+
+</details>

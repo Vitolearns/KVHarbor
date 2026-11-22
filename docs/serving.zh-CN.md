@@ -4,12 +4,12 @@
 
 ## 构建准备
 
-参考环境是 Ubuntu 24.04（原生 Linux 或 WSL2）和 RTX 5090 Laptop GPU，
-锁定的 CUDA 构建目标是 SM120。主机需要 Bash、Git、curl、Python 3.12+、
-可访问 NVIDIA GPU 的 Docker，以及 `libboost-dev` 和 `nlohmann-json3-dev`。
-下列命令从仓库根目录执行。
+环境为 Ubuntu 24.04 或 WSL2，需要 Bash、Git、curl、Python 3.12+、
+可访问 NVIDIA GPU 的 Docker、`libboost-dev` 和 `nlohmann-json3-dev`。
+参考 GPU 为 RTX 5090 Laptop，锁定的构建目标是 SM120。
 
-三个启动方式共用同一个 CUDA 镜像和 llama.cpp 构建。先拉取镜像并构建依赖。
+从仓库根目录执行命令，先构建共用的 CUDA 依赖。
+服务以前台模式运行，另开终端发送请求，切换后端前按 Ctrl+C 停止服务。
 
 ```bash
 image=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["build_image"])')
@@ -19,31 +19,22 @@ python3 scripts/llama_runtime.py build --jobs 4
 
 ## CUDA 文本生成
 
-创建 `models/` 目录并将[锁定版本的 GGUF](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf)保存到其中。
-[文本运行时清单](../configs/runtime/llama.json)记录了模型校验和、llama.cpp 版本和 CUDA 镜像。
+将锁定版本的 Qwen3.8-27B Q4_K_M GGUF 保存到 `models/`，校验后构建并启动服务。
+[模型下载](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf) · [运行时清单](../configs/runtime/llama.json)
 
 ```bash
+unset KVHARBOR_EDGE_SDK KVHARBOR_AUDIO KVHARBOR_SERVING_BUILD_DIR
 export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
 model_sha256=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["model"]["sha256"])')
 printf '%s  %s\n' "$model_sha256" "$GGUF_MODEL" | sha256sum --check -
-```
-
-校验通过后，构建服务。
-
-```bash
 bash scripts/native_serving.sh build
-```
-
-以前台模式启动服务。
-
-```bash
 bash scripts/native_serving.sh serve --text-backend llama.cpp \
   --workers 1 --context 2048 --batch 512 \
   --threads 4 --gpu-layers 99 --reuse-context --sampling direct --max-output-rows 1 \
   --queue 8 --timeout-ms 8000 --policy fifo
 ```
 
-另开终端检查健康状态并发送会话请求。SSE 最后一条记录为 `data: [DONE]`。
+检查健康状态并发送请求。完整 SSE 响应以 `data: [DONE]` 结束。
 
 ```bash
 curl -fsS http://127.0.0.1:8082/health
@@ -55,50 +46,27 @@ curl -fsSN http://127.0.0.1:8082/v1/chat/completions \
 
 ## TensorRT Edge-LLM 文本生成
 
-先完成[构建准备](#构建准备)，然后安装
-[运行时清单](../configs/runtime/edge-llm.json)指定版本的 TensorRT Edge-LLM SDK。
-参考文本引擎使用 Qwen3.5-0.8B，单序列最多输入 1,024 个 token，KV 缓存容量为 2,048 个 token。
-安装 SDK 的 ONNX 导出依赖以使用 `trtedge export`，再在实际提供推理的 GPU 上构建引擎。
-若镜像缺少对应版本和架构的 TensorRT builder 库，可通过 `KVHARBOR_TRT_BUILDER_LIB_DIR`
-指定其所在目录。启动脚本将仓库挂载到容器内的 `/workspace`。
-
-切换后端前，先停止正在运行的文本服务。
-
-```bash
-python3 scripts/prepare_pc_model.py Qwen3.5-0.8B
-export KVHARBOR_EDGE_SDK=/absolute/path/to/edge-llm-sdk
-trtedge export models/qwen3.5-0.8b .cache/qwen3.5-edge-onnx --skip-visual --skip-audio
-bash scripts/build_pc_edge_engine.sh .cache/qwen3.5-edge-onnx/llm
-bash scripts/native_serving.sh build
-
-bash scripts/native_serving.sh serve --text-backend tensorrt-edge-llm \
-  --model-id Qwen3.5-0.8B --context 2048 --workers 1 \
-  --engine-dir /workspace/models/qwen3.5-0.8b-edge \
-  --checkpoint-dir /workspace/models/qwen3.5-0.8b
-```
-
-在 `GET /health` 中确认 `runtimes.llm.backend` 为 `tensorrt-edge-llm`。
-复用上方会话请求，将模型改为 `"model":"Qwen3.5-0.8B"`。
-CUDA Graph 默认开启，可用 `--edge-no-cuda-graph` 关闭以做对照。
+按 [TensorRT 部署流程](tensorrt.zh-CN.md)准备 SDK、导出环境和引擎，再启动
+Qwen3.5-0.8B。参考引擎的输入上限为 1,024 token，KV 容量为 2,048 token。
 
 ## 启用语音
 
-先完成[构建准备](#构建准备)，再停止占用 8082 端口的服务。
-准备脚本按[语音运行时清单](../configs/runtime/audio.json)校验 sherpa-onnx、Qwen3-ASR 和 Kokoro。
-纯语音启动使用 `--text-backend none`，无需 GGUF 模型。
-如果要同时运行文本和语音，构建和启动时都设置 `KVHARBOR_AUDIO=1`，并给所选的
-文本启动命令加上两项语音模型目录参数。
+准备脚本校验 sherpa-onnx、Qwen3-ASR 和 Kokoro。
+用 `--text-backend none` 单独运行语音。混合服务在构建和启动时设置
+`KVHARBOR_AUDIO=1`，并在文本启动命令后加上两项语音模型目录参数。
+[运行时清单](../configs/runtime/audio.json)
 
 ```bash
+unset KVHARBOR_EDGE_SDK KVHARBOR_SERVING_BUILD_DIR
+export KVHARBOR_AUDIO=1
 python3 scripts/prepare_audio_runtime.py
-KVHARBOR_AUDIO=1 bash scripts/native_serving.sh build
-KVHARBOR_AUDIO=1 bash scripts/native_serving.sh serve --text-backend none \
+bash scripts/native_serving.sh build
+bash scripts/native_serving.sh serve --text-backend none \
   --asr-model-dir /workspace/models/audio/qwen3-asr-0.6b-int8 \
   --tts-model-dir /workspace/models/audio/kokoro-v1.0
 ```
 
-另开终端转写仓库内的 Kokoro WAV，并将合成语音保存为裸 PCM。实际采样率见
-`X-Audio-Sample-Rate` 响应头。
+转写仓库内的 WAV，或合成 PCM16。输出采样率见 `X-Audio-Sample-Rate`。
 
 ```bash
 curl -fsS http://127.0.0.1:8082/v1/audio/transcriptions \
@@ -108,75 +76,87 @@ curl -fsS http://127.0.0.1:8082/v1/audio/speech \
   -D speech.headers -o speech.pcm
 ```
 
+ASR、TTS 与 llama.cpp 混合运行时，先停止上面的纯语音服务，在同一终端设置
+GGUF 路径并启动文本后端。复用刚构建的语音版本。
+
+```bash
+export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
+bash scripts/native_serving.sh serve --text-backend llama.cpp --context 2048 \
+  --workers 1 --reuse-context --max-output-rows 1 --timeout-ms 180000 \
+  --asr-model-dir /workspace/models/audio/qwen3-asr-0.6b-int8 \
+  --tts-model-dir /workspace/models/audio/kokoro-v1.0
+```
+
+## 交互演示
+
+先准备 GGUF、[Edge 引擎与 SDK](tensorrt.zh-CN.md) 和上文的语音模型，再构建同时支持两个文本后端和语音的服务。
+
+```bash
+export KVHARBOR_AUDIO=1
+export KVHARBOR_EDGE_SDK="$PWD/.cache/kvharbor/edge-sdk-v0.12.0-sm120"
+export KVHARBOR_SERVING_BUILD_DIR="$PWD/build-serving-262k-edge"
+bash scripts/native_serving.sh build
+bash scripts/demo/serve.sh --llama
+```
+
+另开终端执行 `python3 -B scripts/demo/client.py`。启动参数 `--trt` 可直接加载 TensorRT。
+默认端口是 18082，也可以在两个终端设置相同的 `KVHARBOR_DEMO_PORT` 来使用其他空闲端口。按 Ctrl+C 停止启动器。
+
+| 客户端输入 | 演示内容 |
+| --- | --- |
+| 直接提问，或输入 `/engine` | 查看流式回答，或显示当前文本后端。 |
+| `/engine trt`、`/engine llama` | 在同一块 GPU 和同一端口重新加载模型。更换引擎后清空文本历史，并读取新的输出上限。 |
+| `/tts See you at the pier.`、`/play` | 合成 WAV，播放最近一次合成的音频。 |
+| `/asr`、`/asr assets/readme/ferry.wav` | 转写上次合成的音频，或指定的单声道 PCM16 WAV。 |
+| `/mix`、`/status` | 同时发起文本、转写和合成请求，或查看各任务的 worker 和队列。 |
+
+演示配置中，llama.cpp 的上下文和单轮输出上限分别为 262,144 和 16,384 个 token，TensorRT 分别为 2,048 和 1,024。日志和 WAV 保存在 `.local/demo/runs/`。
+
+## API
+
+| 接口 | 请求 → 响应 |
+| --- | --- |
+| `POST /v1/chat/completions`、`POST /v1/completions` | 含 `stream: true`、`temperature: 0` 的 JSON → SSE |
+| `POST /v1/audio/transcriptions` | 单声道 PCM16 WAV → JSON 转写 |
+| `POST /v1/audio/speech` | JSON 文本 → PCM16，响应头标注采样率 |
+| `GET /health`、`/state`、`/metrics`、`/v1/models` | 运行状态、任务占用、Prometheus 指标和已加载模型 |
+
+`max_tokens` 和音色 ID 等整数字段使用 JSON 整数。
+`--max-output-tokens` 设置输出上限，`--timeout-ms` 设置请求时限，
+两项配置均显示在 `/health` 中。
+
 ## 实现细节
 
-[NOTICE.md](../NOTICE.md)记录署名与来源。[llama.cpp](../configs/runtime/llama.json)、
-[Edge-LLM](../configs/runtime/edge-llm.json)和[语音](../configs/runtime/audio.json)运行时清单
-列出上游组件和模型产物。
+<a name="context-与调度"></a>
+<a name="采样与输出容量"></a>
+<a name="取消与资源归还"></a>
 
-### Context 与调度
+| 机制 | 行为 |
+| --- | --- |
+| Worker 名额 | 每个 llama.cpp worker 独占一个单序列 context，直到原生执行结束。 |
+| `--reuse-context` | 复用内存分配，每次请求前清空注意力 KV 和循环状态。 |
+| `--policy fifo\|deadline` | 决定等待中的 HTTP 请求顺序。 |
+| `--engine-schedule fifo\|decode-first` | 在独立 context 间串行交错 prefill/decode，等待许可时可取消。 |
+| 采样 | 贪心生成。直接 argmax 借用 logits，选择 AVX2 或标量实现。单行输出读取最后一行 logits。 |
+| 长上下文 | llama.cpp 最多接受 262,144 个 context token，`--kv-cache-q8` 启用 Q8_0 KV 与 flash attention。Edge-LLM 容量由已构建的引擎决定。 |
 
-在 llama.cpp 适配器中，每个 worker 独占一个请求，直到原生调用返回。一个 context 只包含一条序列
-（`n_seq_max = 1`）。复用 context 保留已分配内存，每次请求前清空注意力 KV 和
-循环状态。
+断连或超时会设置取消标记、停止响应管道并唤醒阻塞的生产者。
+运行中的 worker 等引擎同步完成后归还名额，排队取消则移除队列条目。
+请求与 worker 账目分别满足 `accepted = terminal + active + queued`
+和 `started = slot_releases + active`。
 
-`--engine-schedule off` 让 worker 直接调用引擎。启用 FIFO 或 decode-first 后，
-`--prefill-chunk` 在独立 context 的实际 prefill 分块和 decode 步骤之间提供调度点。
-引擎调用串行交错，一次 `llama_batch` 仍只含当前请求的一条序列，KV 分配沿用
-llama.cpp。采样和 socket 输出由请求 worker 处理。
+<a name="实测数据与版本"></a>
+<a name="如何阅读性能数据"></a>
 
-`--policy fifo|deadline` 决定 HTTP 等待队列的顺序。`--engine-schedule fifo|decode-first`
-在请求取得 worker 后决定引擎调用顺序。等待调度许可时可取消。开始执行的调用在
-同步完成后才归还许可。
-
-### 采样与输出容量
-
-直接贪心 argmax 借用 logits 数组，根据 CPU 能力选择 AVX2 或标量实现，支持
-temperature 为零。旧实现与上游 sampler 路径可以用于对照。
-
-单行输出使用 llama.cpp 的输出容量参数。适配层只读单序列调用的最后一行 logits。
-将来引入多序列批处理时，需要重新验证这个假设。
-
-`max_tokens` 和音色 ID 等整数字段只接受取值在范围内的 JSON 整数。温度和语速
-接受 JSON 数值，布尔值会被拒绝。
-
-### 实测数据与版本
-
-[采样](../docs/experiments/perf-002-sampling.md)、[GPU 分析](../docs/experiments/perf-003-gpu.md)、
-[单 worker 容量](../docs/experiments/serving-capacity.md)和[调度实验](../docs/experiments/prefill-decode.md)
-各自记录运行配置。历史 llama-server slot 数据对应上游二进制，KVHarbor 的
-单 worker 服务数据见单独的报告。
-
-实验保留采集时的源码与二进制标识。后续代码变更不会重写历史数据的版本标识。
-样本量、未完成的 SSE 流和端到端退化也记录在报告里。
-
-### 取消与资源归还
-
-reactor 负责请求准入与终态。运行中发生断连或超时时，服务设置共享取消标记、
-停止响应管道并唤醒阻塞的生产者。worker 在引擎同步完成后返回，reactor 归还
-名额、递增归还计数并写入唯一终态。取消排队中的请求只移除队列条目，开始与
-归还计数均保持原值。
-
-`accepted = terminal + active + queued` 校验请求总数。
-`started = slot_releases + active` 校验 worker 名额。容量测试脚本检查两条等式，
-覆盖超时请求未取得 worker 的情况。
-
-引擎调度的许可与 worker 名额独立。取消等待时移除排队票据，执行中的调用离开
-作用域时归还许可。采样与网络背压可继续占用 worker 名额。
-
-### 如何阅读性能数据
-
-采样实验的阶段耗时中位数从每 token 461.42 微秒降到 107.61 微秒。HTTP 完成时间中位数
-从 1,632.85 毫秒降到 1,623.92 毫秒。端到端还涵盖排队、prefill、矩阵向量计算、同步和传输。
-
-decode-first 在四组成对实验中降低了 TPOT p95，SLO goodput 持平或下降。首 token
-延迟退化的样本也保存在报告中。该策略由参数开启。
+每份实验记录对应的源码、二进制、负载和测量范围。
+阶段耗时与端到端结果见[采样实验](experiments/perf-002-sampling.md)和
+[调度实验](experiments/prefill-decode.md)。
 
 ## 开发
 
-源码入口包括 [HTTP 传输](../serving/src/server.cc)、[任务准入](../serving/src/admission.cc)
+完成 [CPU 构建](../README.zh-CN.md#快速开始)后执行以下检查。
+源码入口为 [HTTP 传输](../serving/src/server.cc)、[任务准入](../serving/src/admission.cc)
 和[运行时接口](../serving/include/kvharbor/serving/runtime.h)。
-README 的四张架构图共用[绘图源文件](../scripts/render_readme_architecture.py)。
 
 ```bash
 ctest --test-dir build-serving-cpu --output-on-failure
@@ -184,3 +164,5 @@ python3 serving/tests/test_http.py build-serving-cpu/kvharbor-server
 python3 tests/test_stream_bench.py
 python3 tests/test_capacity_bench.py
 ```
+
+[README 绘图源文件](../scripts/render_readme_architecture.py) · [署名与依赖条款](../NOTICE.md)

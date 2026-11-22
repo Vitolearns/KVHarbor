@@ -4,13 +4,13 @@
 
 ## Build prerequisites
 
-The reference environment is Ubuntu 24.04 on Linux or WSL2 with an
-RTX 5090 Laptop GPU. The pinned CUDA build targets SM120. Use Bash, Git, curl,
-Python 3.12+, Docker with NVIDIA GPU access, `libboost-dev` and
-`nlohmann-json3-dev`. Run the commands from the repository root.
+Use Ubuntu 24.04 or WSL2, Bash, Git, curl, Python 3.12+, Docker with NVIDIA GPU
+access, `libboost-dev` and `nlohmann-json3-dev`. The reference GPU is an
+RTX 5090 Laptop, and the pinned build targets SM120.
 
-The native launcher uses the same image and llama.cpp build for all three
-setups below. Pull the image and build llama.cpp once.
+Run commands from the repository root. Build the shared CUDA dependencies once.
+Run servers in the foreground, send requests from another terminal, and stop
+the server with Ctrl+C before switching backends.
 
 ```bash
 image=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["build_image"])')
@@ -20,33 +20,22 @@ python3 scripts/llama_runtime.py build --jobs 4
 
 ## CUDA text generation
 
-Create `models/` and save the [locked GGUF](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf) there.
-The [text runtime lock](../configs/runtime/llama.json) specifies the model
-checksum, llama.cpp revision, and CUDA image.
+Save the locked Qwen3.8-27B Q4_K_M GGUF in `models/`, verify it, then build
+and start the server. [Weights](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/resolve/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf) · [Runtime lock](../configs/runtime/llama.json)
 
 ```bash
+unset KVHARBOR_EDGE_SDK KVHARBOR_AUDIO KVHARBOR_SERVING_BUILD_DIR
 export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
 model_sha256=$(python3 -c 'import json; print(json.load(open("configs/runtime/llama.json"))["model"]["sha256"])')
 printf '%s  %s\n' "$model_sha256" "$GGUF_MODEL" | sha256sum --check -
-```
-
-Build the server after the checksum passes.
-
-```bash
 bash scripts/native_serving.sh build
-```
-
-Start the server in the foreground.
-
-```bash
 bash scripts/native_serving.sh serve --text-backend llama.cpp \
   --workers 1 --context 2048 --batch 512 \
   --threads 4 --gpu-layers 99 --reuse-context --sampling direct --max-output-rows 1 \
   --queue 8 --timeout-ms 8000 --policy fifo
 ```
 
-In another terminal, check health and send a chat request. The last SSE record
-is `data: [DONE]`.
+Check health and send a request. A complete SSE response ends with `data: [DONE]`.
 
 ```bash
 curl -fsS http://127.0.0.1:8082/health
@@ -58,53 +47,29 @@ curl -fsSN http://127.0.0.1:8082/v1/chat/completions \
 
 ## TensorRT Edge-LLM text generation
 
-Complete the [build prerequisites](#build-prerequisites) first.
-Install the TensorRT Edge-LLM SDK specified in the [runtime lock](../configs/runtime/edge-llm.json).
-The reference text engine uses Qwen3.5-0.8B, one sequence, up to 1,024 input
-tokens and a 2,048-token KV cache. Install the SDK's ONNX export dependencies
-for `trtedge export`. Build on the GPU that will serve the engine. If the build
-image needs extra TensorRT builder resources, set `KVHARBOR_TRT_BUILDER_LIB_DIR`
-to the directory containing the matching libraries. The launcher mounts the
-repository at `/workspace`.
-
-Stop the running text server before switching backends.
-
-```bash
-python3 scripts/prepare_pc_model.py Qwen3.5-0.8B
-export KVHARBOR_EDGE_SDK=/absolute/path/to/edge-llm-sdk
-trtedge export models/qwen3.5-0.8b .cache/qwen3.5-edge-onnx --skip-visual --skip-audio
-bash scripts/build_pc_edge_engine.sh .cache/qwen3.5-edge-onnx/llm
-bash scripts/native_serving.sh build
-
-bash scripts/native_serving.sh serve --text-backend tensorrt-edge-llm \
-  --model-id Qwen3.5-0.8B --context 2048 --workers 1 \
-  --engine-dir /workspace/models/qwen3.5-0.8b-edge \
-  --checkpoint-dir /workspace/models/qwen3.5-0.8b
-```
-
-Check `GET /health` for `runtimes.llm.backend` set to `tensorrt-edge-llm`.
-Reuse the chat request above with `"model":"Qwen3.5-0.8B"`. CUDA Graph is
-enabled by default and `--edge-no-cuda-graph` disables it for a comparison.
+Follow the [TensorRT recipe](tensorrt.md) to prepare the SDK, export environment
+and engine, then serve Qwen3.5-0.8B. The reference engine accepts 1,024 input
+tokens and a 2,048-token KV cache.
 
 ## Enable speech
 
-Complete the [build prerequisites](#build-prerequisites) and stop any
-server using port 8082. The preparation script verifies sherpa-onnx,
-Qwen3-ASR and Kokoro against the [speech runtime lock](../configs/runtime/audio.json).
-Use `--text-backend none` to start speech on its own without a GGUF model.
-For mixed serving, build and serve with `KVHARBOR_AUDIO=1` and append the
-ASR and TTS model directory flags to the chosen text server command.
+The preparation script verifies sherpa-onnx, Qwen3-ASR and Kokoro.
+Use `--text-backend none` for speech-only serving. For mixed serving, set
+`KVHARBOR_AUDIO=1` during build and launch, and append both audio model flags
+to the chosen text command. [Runtime lock](../configs/runtime/audio.json)
 
 ```bash
+unset KVHARBOR_EDGE_SDK KVHARBOR_SERVING_BUILD_DIR
+export KVHARBOR_AUDIO=1
 python3 scripts/prepare_audio_runtime.py
-KVHARBOR_AUDIO=1 bash scripts/native_serving.sh build
-KVHARBOR_AUDIO=1 bash scripts/native_serving.sh serve --text-backend none \
+bash scripts/native_serving.sh build
+bash scripts/native_serving.sh serve --text-backend none \
   --asr-model-dir /workspace/models/audio/qwen3-asr-0.6b-int8 \
   --tts-model-dir /workspace/models/audio/kokoro-v1.0
 ```
 
-In another terminal, transcribe the bundled Kokoro WAV and synthesize a raw
-PCM response. The `X-Audio-Sample-Rate` response header gives the output rate.
+Transcribe the bundled WAV or synthesize PCM16. The output sample rate is in
+`X-Audio-Sample-Rate`.
 
 ```bash
 curl -fsS http://127.0.0.1:8082/v1/audio/transcriptions \
@@ -114,100 +79,93 @@ curl -fsS http://127.0.0.1:8082/v1/audio/speech \
   -D speech.headers -o speech.pcm
 ```
 
+To combine ASR and TTS with llama.cpp, stop the speech-only server above.
+In the same terminal, set the GGUF path and launch the text backend using the
+audio build.
+
+```bash
+export GGUF_MODEL="$PWD/models/Qwen3.8-27B-Q4_K_M.gguf"
+bash scripts/native_serving.sh serve --text-backend llama.cpp --context 2048 \
+  --workers 1 --reuse-context --max-output-rows 1 --timeout-ms 180000 \
+  --asr-model-dir /workspace/models/audio/qwen3-asr-0.6b-int8 \
+  --tts-model-dir /workspace/models/audio/kokoro-v1.0
+```
+
+## Interactive demo
+
+Prepare the GGUF, [Edge engine and SDK](tensorrt.md), and the speech models above.
+Build one server with both text backends and speech enabled.
+
+```bash
+export KVHARBOR_AUDIO=1
+export KVHARBOR_EDGE_SDK="$PWD/.cache/kvharbor/edge-sdk-v0.12.0-sm120"
+export KVHARBOR_SERVING_BUILD_DIR="$PWD/build-serving-262k-edge"
+bash scripts/native_serving.sh build
+bash scripts/demo/serve.sh --llama
+```
+
+In a second terminal run `python3 -B scripts/demo/client.py`. Use `--trt` on
+the launcher to start with TensorRT. Set `KVHARBOR_DEMO_PORT` in both terminals
+to use a free port other than 18082. Stop the launcher with Ctrl+C.
+
+| In the client | What happens |
+| --- | --- |
+| A question or `/engine` | Stream a reply or show the current text backend. |
+| `/engine trt`, `/engine llama` | Reload the model on the same GPU and port. On a change, text history resets and the client reads the new output limit. |
+| `/tts See you at the pier.`, `/play` | Synthesize a WAV, then play the most recent WAV. |
+| `/asr`, `/asr assets/readme/ferry.wav` | Transcribe the last synthesized WAV or a supplied mono PCM16 WAV. |
+| `/mix`, `/status` | Submit text, transcription and synthesis concurrently or inspect the worker queues. |
+
+The reference profiles use 262,144 context / 16,384 output tokens for llama.cpp and
+2,048 / 1,024 for TensorRT. Logs and WAVs are saved under `.local/demo/runs/`.
+
+## API
+
+| Endpoint | Request → response |
+| --- | --- |
+| `POST /v1/chat/completions`, `POST /v1/completions` | JSON with `stream: true` and `temperature: 0` → SSE |
+| `POST /v1/audio/transcriptions` | Mono PCM16 WAV → JSON transcript |
+| `POST /v1/audio/speech` | JSON text → PCM16 with a sample-rate header |
+| `GET /health`, `/state`, `/metrics`, `/v1/models` | Runtime health, task occupancy, Prometheus metrics and loaded models |
+
+Integer fields such as `max_tokens` and voice IDs require JSON integers.
+`--max-output-tokens` caps generated tokens, and `--timeout-ms` sets the
+request deadline. Both configured limits appear in `/health`.
+
 ## Implementation notes
 
-[NOTICE.md](../NOTICE.md) records attribution. The [llama.cpp](../configs/runtime/llama.json),
-[Edge-LLM](../configs/runtime/edge-llm.json) and [speech](../configs/runtime/audio.json)
-runtime locks identify upstream components and model artifacts.
+<a name="contexts-and-scheduling"></a>
+<a name="sampling-and-output-capacity"></a>
+<a name="cancellation-and-ownership"></a>
 
-### Contexts and scheduling
+| Mechanism | Behavior |
+| --- | --- |
+| Worker ownership | Each llama.cpp worker owns one single-sequence context until native execution finishes. |
+| `--reuse-context` | Retains allocations and clears attention KV and recurrent state between requests. |
+| `--policy fifo\|deadline` | Orders waiting HTTP requests. |
+| `--engine-schedule fifo\|decode-first` | Interleaves serial prefill/decode calls across independent contexts, with cancellable permit waits. |
+| Sampling | Greedy decoding. Direct argmax borrows logits and selects AVX2 or scalar code. One-row output consumes the last logits row. |
+| Long contexts | llama.cpp accepts up to 262,144 context tokens. `--kv-cache-q8` selects Q8_0 KV and flash attention. Edge-LLM capacity follows its built engine. |
 
-In the llama.cpp adapter, each worker owns one request until native execution returns. Each context
-contains one sequence (`n_seq_max = 1`). Context reuse retains allocations and
-clears both attention KV and recurrent state between requests. It does not
-reuse the previous request's prefix.
+On disconnect or expiry, cancellation stops the response pipe and wakes blocked
+producers. A running worker releases its slot after engine synchronization.
+Queued cancellation removes the queue entry. Request and worker accounting use
+`accepted = terminal + active + queued` and `started = slot_releases + active`.
 
-With `--engine-schedule off`, the worker calls the engine directly. With FIFO
-or decode-first, `--prefill-chunk` exposes scheduling points between real
-prefill chunks and decode steps in independent contexts. This is interleaving
-of serial engine calls. It does not combine several sequences into one
-`llama_batch`, implement cross-request continuous batching, or replace the
-upstream KV allocator. Sampling and socket output stay with the request worker.
+<a name="evidence-identity"></a>
+<a name="performance-interpretation"></a>
 
-`--policy fifo|deadline` controls waiting HTTP requests. It is independent of
-`--engine-schedule fifo|decode-first`, which controls engine calls after a
-request has acquired a worker. Waiting for the engine is cancellable; an
-already executing call retains its permit until synchronization finishes.
-
-### Sampling and output capacity
-
-Direct greedy argmax borrows the logits array and has runtime AVX2 dispatch
-with a scalar fallback. The adapter supports temperature zero. Legacy and
-upstream sampler paths remain available for comparison.
-
-The one-output-row setting uses llama.cpp's existing output-capacity parameter.
-The current adapter consumes only the last logits row from each single-sequence
-call. Multi-sequence batching would require reassessing this assumption.
-
-Integer request fields, including `max_tokens` and speech voice IDs, require
-JSON integers within their supported range. Booleans, strings and floating-
-point values are rejected. Numeric fields such as temperature and speech
-speed accept JSON numbers and reject booleans.
-
-### Evidence identity
-
-The [sampling](../docs/experiments/perf-002-sampling.md),
-[GPU](../docs/experiments/perf-003-gpu.md),
-[single-worker capacity](../docs/experiments/serving-capacity.md), and
-[dispatch](../docs/experiments/prefill-decode.md) reports identify their own runtime
-settings. Historical upstream llama-server slot measurements belong to that
-binary. They are not measurements of KVHarbor's single-worker service.
-
-New measurements retain the source and binary used during the run. Historical
-datasets keep their original fingerprints when the current source changes.
-Small samples, partial streams and negative end-to-end results remain visible.
-
-### Cancellation and ownership
-
-The reactor owns admission and terminal transitions. A running job retains its
-slot while the worker is inside the native call. Disconnect or expiry sets the
-shared cancellation flag, stops the response pipe and wakes blocked producers.
-The worker returns after engine synchronization; the reactor then clears the
-slot, increments its release counter and records one terminal outcome. Queued
-cancellation removes the job without incrementing either started workers or
-worker releases.
-
-`accepted = terminal + active + queued` checks request accounting.
-`started = slot_releases + active` checks worker ownership. Requiring every
-accepted request to have a worker release would incorrectly count queued
-timeouts as leaks. Requiring releases merely to stay below terminal count
-would miss a leaked release. The capacity driver checks both equalities.
-
-The dispatcher has a separate engine-call permit. A cancelled waiter removes
-its ticket before acquiring that permit. An executing operation returns it
-through a scope guard. This permit is narrower than the worker lease:
-sampling and network backpressure can keep a worker occupied between engine
-calls without keeping the dispatch permit.
-
-### Performance interpretation
-
-Sampling speedups apply to the sampling stage. The HTTP request also includes
-queueing, prefill, matrix-vector operations, synchronization and transport.
-The sampling experiment reduced stage p50 from 461.42 to 107.61 microseconds per
-token while HTTP completion p50 changed from 1,632.85 to 1,623.92 ms. Those
-measurements support a local optimization with a small end-to-end effect.
-They do not support a 76.7% request-level speedup.
-
-The dispatch experiment makes a similar tradeoff visible: decode-first lowered
-TPOT p95 in its four paired runs but did not improve SLO goodput. The opt-in
-policy and its negative TTFT results remain part of the published experiment.
+Each experiment records its source, binary, workload and measurement scope.
+Stage timings and end-to-end results are reported together in the
+[sampling](experiments/perf-002-sampling.md) and
+[dispatch](experiments/prefill-decode.md) reports.
 
 ## Development
 
-The service entry points are [HTTP transport](../serving/src/server.cc),
-[task admission](../serving/src/admission.cc), and the
-[runtime interface](../serving/include/kvharbor/serving/runtime.h). The four README SVGs share one
-[diagram source](../scripts/render_readme_architecture.py).
+Build the [CPU target](../README.md#quick-start), then run the checks below.
+Source entry points are [HTTP transport](../serving/src/server.cc),
+[admission](../serving/src/admission.cc) and the
+[runtime interface](../serving/include/kvharbor/serving/runtime.h).
 
 ```bash
 ctest --test-dir build-serving-cpu --output-on-failure
@@ -215,3 +173,5 @@ python3 serving/tests/test_http.py build-serving-cpu/kvharbor-server
 python3 tests/test_stream_bench.py
 python3 tests/test_capacity_bench.py
 ```
+
+[README diagram source](../scripts/render_readme_architecture.py) · [Attribution and dependency terms](../NOTICE.md)
