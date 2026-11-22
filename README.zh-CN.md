@@ -54,7 +54,7 @@ curl -fsSN http://127.0.0.1:18082/v1/chat/completions \
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-zh-dark.svg">
-    <img src="assets/readme/architecture-zh-light.svg" width="720" alt="KVHarbor 将 HTTP 请求分到文本生成、语音识别和语音合成队列。文本在 llama.cpp 和 TensorRT Edge-LLM 中选一个后端，返回 SSE 文本流。Qwen3-ASR 返回 JSON 转写，Kokoro 返回 PCM16 音频流。">
+    <img src="assets/readme/architecture-zh-light.svg" width="720" alt="KVHarbor 单进程架构。HTTP 接口把类型化请求交给共享调度模块，分派到文本生成、语音识别和语音合成各自的队列和适配器。">
   </picture>
 </p>
 

@@ -1,60 +1,95 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" width="720" height="520"
-     xml:lang="zh-CN" role="img" aria-labelledby="diagram-title diagram-description" font-family="system-ui, -apple-system, Segoe UI, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 448" width="720" height="448"
+     xml:lang="zh-CN" role="img" aria-labelledby="diagram-title diagram-description">
   <title id="diagram-title">KVHarbor 服务架构</title>
-  <desc id="diagram-description">C++20 HTTP 服务把请求分到各自的任务队列和工作线程。文本生成在启动时选择一个 GPU 后端，返回 SSE 文本流。CPU 语音识别返回 JSON，CPU 语音合成返回 PCM16 音频流。</desc>
-  <rect x=".5" y=".5" width="719" height="519" rx="24" fill="#eef4f2" stroke="#bbccc8"/>
-  <path d="M24 1H696a23 23 0 0 1 23 23v107H1V24A23 23 0 0 1 24 1Z" fill="#14363a"/>
-  <rect x="27" y="37" width="57" height="57" rx="15" fill="#285353"/>
-  <path d="M40 65h9m0 0v-10q0-4 4-4h16M49 65h20M49 65v10q0 4 4 4h16
-           M65 47l4 4-4 4m0 6 4 4-4 4m0 6 4 4-4 4"
-        fill="none" stroke="#a9ead6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="101" y="63" fill="#f1faf7" font-size="37" font-weight="750" letter-spacing="-.9">KVHarbor</text>
-  <text x="103" y="91" fill="#bde4d9" font-size="21" font-weight="550">HTTP 接口 · C++20</text>
-  <path d="M365 38v56" fill="none" stroke="#658a85"/>
-  <g fill="#f1faf7" font-size="21" font-weight="550">
-    <text x="393" y="59">请求准入 · 截止时间</text>
-    <text x="393" y="86">请求取消 · 输出背压</text>
+  <desc id="diagram-description">同一个 kvharbor-server 进程经共享调度将请求分到文本生成、语音识别和语音合成队列。各运行时适配器调用选定的文本引擎或 CPU 上的 sherpa-onnx。HTTP 接口负责返回 SSE、JSON 或 PCM16。</desc>
+  <style>
+    text {
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      fill: #1f2328;
+    }
+    .panel { fill: #ffffff; stroke: #8c959f; stroke-width: 1.25; }
+    .node { font-size: 17px; font-weight: 650; }
+    .detail { font-size: 14px; fill: #424a53; }
+    .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    .engine { font-size: 15px; font-weight: 650; }
+    .device { font-size: 12px; fill: #424a53; text-anchor: end; }
+  </style>
+  <defs>
+    <marker id="request-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0 0L8 4 0 8Z" fill="#0969da"/>
+    </marker>
+    <marker id="response-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0 0L8 4 0 8Z" fill="#57606a"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="448" fill="#ffffff"/>
+  <rect x="12" y="66" width="696" height="370" rx="8"
+        fill="#f6f8fa" stroke="#8c959f" stroke-width="1.25"/>
+  <text class="mono" x="28" y="89" font-size="15" font-weight="700">kvharbor-server</text>
+  <text class="detail" x="692" y="89" text-anchor="end">单个 C++20 进程</text>
+
+  <rect class="panel" x="282" y="8" width="156" height="32" rx="5"/>
+  <rect class="panel" x="150" y="101" width="420" height="57" rx="5"/>
+  <rect x="106" y="198" width="508" height="57" rx="5"
+        fill="#eaf3ff" stroke="#0969da" stroke-width="1.25"/>
+  <g text-anchor="middle">
+    <text class="node" x="360" y="30">HTTP 客户端</text>
+    <text class="node" x="360" y="125">HTTP 接口</text>
+    <text class="detail" x="360" y="146">路由请求 · 返回 SSE、JSON 或 PCM16</text>
+    <text class="node" x="360" y="222">请求准入与调度</text>
+    <text class="detail" x="360" y="243">分任务有界队列 · 截止时间 · 取消 · 背压</text>
   </g>
 
-  <g fill="#466361" font-size="19" font-weight="650">
-    <text x="84" y="176">队列与工作线程</text>
-    <text x="296" y="176">推理后端</text>
-    <text x="557" y="176">HTTP 响应</text>
-  </g>
-  <rect x="67" y="200" width="628" height="127" rx="15" fill="#daede5" stroke="#accbc1"/>
-  <rect x="67" y="341" width="628" height="70" rx="15" fill="#f8fbfa" stroke="#c9d8d6"/>
-  <rect x="67" y="425" width="628" height="70" rx="15" fill="#f8fbfa" stroke="#c9d8d6"/>
-  <g fill="none" stroke="#517a73" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M35 133v315"/>
-    <path d="M35 252q0 12 12 12h17m-5-5 5 5-5 5 M255 264h23m-5-5 5 5-5 5 M517 264h23m-5-5 5 5-5 5"/>
-    <path d="M35 364q0 12 12 12h17m-5-5 5 5-5 5 M255 376h23m-5-5 5 5-5 5 M517 376h23m-5-5 5 5-5 5"/>
-    <path d="M35 448q0 12 12 12h17m-5-5 5 5-5 5 M255 460h23m-5-5 5 5-5 5 M517 460h23m-5-5 5 5-5 5"/>
-  </g>
-  <circle cx="35" cy="131" r="4.5" fill="#517a73"/>
+  <rect class="panel" x="34" y="296" width="208" height="38" rx="5"/>
+  <text class="node" x="138" y="321" text-anchor="middle">文本适配器</text>
+  <rect class="panel" x="256" y="296" width="208" height="38" rx="5"/>
+  <text class="node" x="360" y="321" text-anchor="middle">语音识别适配器</text>
+  <rect class="panel" x="478" y="296" width="208" height="38" rx="5"/>
+  <text class="node" x="582" y="321" text-anchor="middle">语音合成适配器</text>
 
-  <g fill="#193739" font-size="23" font-weight="680">
-    <text x="84" y="272">文本生成</text>
-    <text x="84" y="384">语音识别</text>
-    <text x="84" y="468">语音合成</text>
+  <rect class="panel" x="34" y="355" width="208" height="65" rx="5"/>
+  <rect class="panel" x="256" y="355" width="208" height="65" rx="5"/>
+  <rect class="panel" x="478" y="355" width="208" height="65" rx="5"/>
+
+  <text class="detail" x="45" y="373">启动时二选一</text>
+  <text class="engine" x="45" y="393">llama.cpp</text>
+  <text class="engine" x="45" y="412">TensorRT Edge-LLM</text>
+  <text class="engine" x="267" y="382">sherpa-onnx</text>
+  <text class="detail" x="267" y="405">Qwen3-ASR</text>
+  <text class="engine" x="489" y="382">sherpa-onnx</text>
+  <text class="detail" x="489" y="405">Kokoro</text>
+  <g class="mono device">
+    <text x="231" y="393">CPU / CUDA</text>
+    <text x="231" y="412">CUDA</text>
+    <text x="453" y="382">CPU</text>
+    <text x="675" y="382">CPU</text>
   </g>
-  <text x="296" y="226" fill="#165648" font-size="18" font-weight="650">GPU · 启动时二选一</text>
-  <path d="M288 264h9m0-9h11m-11 0v40h11" fill="none" stroke="#517a73" stroke-width="1.5" stroke-linecap="round"/>
-  <g fill="#193739" font-size="21" font-weight="680">
-    <text x="319" y="262">llama.cpp</text>
-    <text x="319" y="302">TensorRT Edge-LLM</text>
-    <text x="296" y="369">Qwen3-ASR</text>
-    <text x="296" y="453">Kokoro</text>
+
+  <g fill="none" stroke="#0969da" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M360 255V274M138 274H582"/>
+    <g marker-end="url(#request-head)">
+      <path d="M347 40V101"/>
+      <path d="M347 158V198"/>
+      <path d="M138 274V296"/>
+      <path d="M360 274V296"/>
+      <path d="M582 274V296"/>
+      <path d="M138 334V355"/>
+      <path d="M360 334V355"/>
+      <path d="M582 334V355"/>
+    </g>
   </g>
-  <g fill="#466361" font-size="18">
-    <text x="296" y="393">sherpa-onnx · CPU</text>
-    <text x="296" y="477">sherpa-onnx · CPU</text>
-    <text x="557" y="288">文本流</text>
-    <text x="557" y="393">转写结果</text>
-    <text x="557" y="477">音频流</text>
+  <g fill="none" stroke="#57606a" stroke-width="1.6" stroke-dasharray="4 3"
+     marker-end="url(#response-head)">
+    <path d="M373 101V40"/>
+    <path d="M373 198V158"/>
   </g>
-  <g fill="#165648" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="22" font-weight="700">
-    <text x="557" y="264">SSE</text>
-    <text x="557" y="369">JSON</text>
-    <text x="557" y="453">PCM16</text>
+  <g class="detail">
+    <text x="335" y="59" text-anchor="end">HTTP 请求</text>
+    <text x="385" y="59">HTTP 响应</text>
+    <text x="335" y="182" text-anchor="end">类型化请求</text>
+    <text x="385" y="182">结果和数据块</text>
   </g>
 </svg>

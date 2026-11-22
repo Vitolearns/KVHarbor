@@ -9,126 +9,165 @@ from pathlib import Path
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "readme"
 
 COPY = {
-    "en": (
-        "KVHarbor serving architecture",
-        "The C++20 HTTP server routes each task to its own queue and workers. "
-        "Text uses one GPU backend selected at startup and returns SSE. "
-        "CPU transcription returns JSON and CPU synthesis streams PCM16.",
-        "HTTP API · C++20", "Admission · Deadlines", "Cancellation · Backpressure",
-        "Queues & workers", "Inference backend", "HTTP response",
-        "Generate text", "Transcribe", "Synthesize", "GPU · choose one at startup",
-        "Text stream", "Transcript", "Audio stream",
-    ),
-    "zh-CN": (
-        "KVHarbor 服务架构",
-        "C++20 HTTP 服务把请求分到各自的任务队列和工作线程。"
-        "文本生成在启动时选择一个 GPU 后端，返回 SSE 文本流。"
-        "CPU 语音识别返回 JSON，CPU 语音合成返回 PCM16 音频流。",
-        "HTTP 接口 · C++20", "请求准入 · 截止时间", "请求取消 · 输出背压",
-        "队列与工作线程", "推理后端", "HTTP 响应",
-        "文本生成", "语音识别", "语音合成", "GPU · 启动时二选一",
-        "文本流", "转写结果", "音频流",
-    ),
+    "en": {
+        "title": "KVHarbor serving architecture",
+        "description": (
+            "One kvharbor-server process routes HTTP requests through a shared "
+            "scheduler with separate queues for text generation, speech recognition "
+            "and speech synthesis. Runtime adapters call the selected text engine or "
+            "sherpa-onnx on CPU. The HTTP API writes SSE, JSON or PCM16 responses."
+        ),
+        "client": "HTTP client",
+        "process": "Single C++20 process",
+        "request": "HTTP request",
+        "response": "HTTP response",
+        "http": "HTTP API",
+        "http_detail": "Routes requests · Writes SSE, JSON or PCM16",
+        "typed_request": "Typed request",
+        "runtime_output": "Results and chunks",
+        "scheduler": "Admission and scheduling",
+        "scheduler_detail": (
+            "Bounded queues per task · Deadlines · Cancellation · Backpressure"
+        ),
+        "text": "Text adapter",
+        "asr": "ASR adapter",
+        "tts": "TTS adapter",
+        "choose": "Choose one at startup",
+    },
+    "zh-CN": {
+        "title": "KVHarbor 服务架构",
+        "description": (
+            "同一个 kvharbor-server 进程经共享调度将请求分到文本生成、语音识别和语音合成队列。"
+            "各运行时适配器调用选定的文本引擎或 CPU 上的 sherpa-onnx。"
+            "HTTP 接口负责返回 SSE、JSON 或 PCM16。"
+        ),
+        "client": "HTTP 客户端",
+        "process": "单个 C++20 进程",
+        "request": "HTTP 请求",
+        "response": "HTTP 响应",
+        "http": "HTTP 接口",
+        "http_detail": "路由请求 · 返回 SSE、JSON 或 PCM16",
+        "typed_request": "类型化请求",
+        "runtime_output": "结果和数据块",
+        "scheduler": "请求准入与调度",
+        "scheduler_detail": "分任务有界队列 · 截止时间 · 取消 · 背压",
+        "text": "文本适配器",
+        "asr": "语音识别适配器",
+        "tts": "语音合成适配器",
+        "choose": "启动时二选一",
+    },
 }
 
 PALETTES = {
     "light": {
-        "canvas": "#eef4f2", "frame": "#bbccc8", "header": "#14363a",
-        "head_text": "#f1faf7", "head_detail": "#bde4d9", "head_line": "#658a85",
-        "icon_bg": "#285353", "icon_ink": "#a9ead6",
-        "text_lane": "#daede5", "text_border": "#accbc1",
-        "audio_lane": "#f8fbfa", "audio_border": "#c9d8d6",
-        "ink": "#193739", "secondary": "#466361", "wire": "#517a73",
-        "accent": "#165648",
+        "canvas": "#ffffff", "process": "#f6f8fa", "panel": "#ffffff",
+        "scheduler": "#eaf3ff", "border": "#8c959f", "ink": "#1f2328",
+        "secondary": "#424a53", "request": "#0969da", "response": "#57606a",
     },
     "dark": {
-        "canvas": "#141f24", "frame": "#3d555b", "header": "#203a39",
-        "head_text": "#f1faf7", "head_detail": "#bbe6dc", "head_line": "#6a918b",
-        "icon_bg": "#2e5350", "icon_ink": "#b2f3dd",
-        "text_lane": "#233b36", "text_border": "#456f63",
-        "audio_lane": "#1c2c33", "audio_border": "#3b5259",
-        "ink": "#e8f3f0", "secondary": "#b0c6c4", "wire": "#86b5ac",
-        "accent": "#a9ead1",
+        "canvas": "#0d1117", "process": "#161b22", "panel": "#0d1117",
+        "scheduler": "#13273d", "border": "#687481", "ink": "#e6edf3",
+        "secondary": "#aab6c3", "request": "#79c0ff", "response": "#9da7b3",
     },
 }
 
 
 def render(language, colors):
-    (title, description, http, admission, cancellation, queues, inference, response,
-     generate, transcribe, synthesize, gpu, text_stream, transcript, audio_stream) = (
-        escape(label) for label in COPY[language]
-    )
+    label = {name: escape(value) for name, value in COPY[language].items()}
     c = colors
-    # Each horizontal lane starts at the same HTTP router and ends at its own response.
-    lanes = (
-        (200, 127, 264, c["text_lane"], c["text_border"]),
-        (341, 70, 376, c["audio_lane"], c["audio_border"]),
-        (425, 70, 460, c["audio_lane"], c["audio_border"]),
+    adapters = "\n".join(
+        f'  <rect class="panel" x="{x - 104}" y="296" width="208" height="38" rx="5"/>\n'
+        f'  <text class="node" x="{x}" y="321" text-anchor="middle">{label[task]}</text>'
+        for x, task in ((138, "text"), (360, "asr"), (582, "tts"))
     )
-    cards = "\n".join(
-        f'  <rect x="67" y="{top}" width="628" height="{height}" rx="15" '
-        f'fill="{fill}" stroke="{border}"/>'
-        for top, height, _, fill, border in lanes
-    )
-    arrows = "\n".join(
-        f'    <path d="M35 {center - 12}q0 12 12 12h17m-5-5 5 5-5 5 '
-        f'M255 {center}h23m-5-5 5 5-5 5 M517 {center}h23m-5-5 5 5-5 5"/>'
-        for _, _, center, _, _ in lanes
-    )
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" width="720" height="520"
-     xml:lang="{language}" role="img" aria-labelledby="diagram-title diagram-description" font-family="system-ui, -apple-system, Segoe UI, PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif">
-  <title id="diagram-title">{title}</title>
-  <desc id="diagram-description">{description}</desc>
-  <rect x=".5" y=".5" width="719" height="519" rx="24" fill="{c['canvas']}" stroke="{c['frame']}"/>
-  <path d="M24 1H696a23 23 0 0 1 23 23v107H1V24A23 23 0 0 1 24 1Z" fill="{c['header']}"/>
-  <rect x="27" y="37" width="57" height="57" rx="15" fill="{c['icon_bg']}"/>
-  <path d="M40 65h9m0 0v-10q0-4 4-4h16M49 65h20M49 65v10q0 4 4 4h16
-           M65 47l4 4-4 4m0 6 4 4-4 4m0 6 4 4-4 4"
-        fill="none" stroke="{c['icon_ink']}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="101" y="63" fill="{c['head_text']}" font-size="37" font-weight="750" letter-spacing="-.9">KVHarbor</text>
-  <text x="103" y="91" fill="{c['head_detail']}" font-size="21" font-weight="550">{http}</text>
-  <path d="M365 38v56" fill="none" stroke="{c['head_line']}"/>
-  <g fill="{c['head_text']}" font-size="21" font-weight="550">
-    <text x="393" y="59">{admission}</text>
-    <text x="393" y="86">{cancellation}</text>
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 448" width="720" height="448"
+     xml:lang="{language}" role="img" aria-labelledby="diagram-title diagram-description">
+  <title id="diagram-title">{label['title']}</title>
+  <desc id="diagram-description">{label['description']}</desc>
+  <style>
+    text {{
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      fill: {c['ink']};
+    }}
+    .panel {{ fill: {c['panel']}; stroke: {c['border']}; stroke-width: 1.25; }}
+    .node {{ font-size: 17px; font-weight: 650; }}
+    .detail {{ font-size: 14px; fill: {c['secondary']}; }}
+    .mono {{ font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }}
+    .engine {{ font-size: 15px; font-weight: 650; }}
+    .device {{ font-size: 12px; fill: {c['secondary']}; text-anchor: end; }}
+  </style>
+  <defs>
+    <marker id="request-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0 0L8 4 0 8Z" fill="{c['request']}"/>
+    </marker>
+    <marker id="response-head" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8"
+            markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0 0L8 4 0 8Z" fill="{c['response']}"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="448" fill="{c['canvas']}"/>
+  <rect x="12" y="66" width="696" height="370" rx="8"
+        fill="{c['process']}" stroke="{c['border']}" stroke-width="1.25"/>
+  <text class="mono" x="28" y="89" font-size="15" font-weight="700">kvharbor-server</text>
+  <text class="detail" x="692" y="89" text-anchor="end">{label['process']}</text>
+
+  <rect class="panel" x="282" y="8" width="156" height="32" rx="5"/>
+  <rect class="panel" x="150" y="101" width="420" height="57" rx="5"/>
+  <rect x="106" y="198" width="508" height="57" rx="5"
+        fill="{c['scheduler']}" stroke="{c['request']}" stroke-width="1.25"/>
+  <g text-anchor="middle">
+    <text class="node" x="360" y="30">{label['client']}</text>
+    <text class="node" x="360" y="125">{label['http']}</text>
+    <text class="detail" x="360" y="146">{label['http_detail']}</text>
+    <text class="node" x="360" y="222">{label['scheduler']}</text>
+    <text class="detail" x="360" y="243">{label['scheduler_detail']}</text>
   </g>
 
-  <g fill="{c['secondary']}" font-size="19" font-weight="650">
-    <text x="84" y="176">{queues}</text>
-    <text x="296" y="176">{inference}</text>
-    <text x="557" y="176">{response}</text>
-  </g>
-{cards}
-  <g fill="none" stroke="{c['wire']}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M35 133v315"/>
-{arrows}
-  </g>
-  <circle cx="35" cy="131" r="4.5" fill="{c['wire']}"/>
+{adapters}
 
-  <g fill="{c['ink']}" font-size="23" font-weight="680">
-    <text x="84" y="272">{generate}</text>
-    <text x="84" y="384">{transcribe}</text>
-    <text x="84" y="468">{synthesize}</text>
+  <rect class="panel" x="34" y="355" width="208" height="65" rx="5"/>
+  <rect class="panel" x="256" y="355" width="208" height="65" rx="5"/>
+  <rect class="panel" x="478" y="355" width="208" height="65" rx="5"/>
+
+  <text class="detail" x="45" y="373">{label['choose']}</text>
+  <text class="engine" x="45" y="393">llama.cpp</text>
+  <text class="engine" x="45" y="412">TensorRT Edge-LLM</text>
+  <text class="engine" x="267" y="382">sherpa-onnx</text>
+  <text class="detail" x="267" y="405">Qwen3-ASR</text>
+  <text class="engine" x="489" y="382">sherpa-onnx</text>
+  <text class="detail" x="489" y="405">Kokoro</text>
+  <g class="mono device">
+    <text x="231" y="393">CPU / CUDA</text>
+    <text x="231" y="412">CUDA</text>
+    <text x="453" y="382">CPU</text>
+    <text x="675" y="382">CPU</text>
   </g>
-  <text x="296" y="226" fill="{c['accent']}" font-size="18" font-weight="650">{gpu}</text>
-  <path d="M288 264h9m0-9h11m-11 0v40h11" fill="none" stroke="{c['wire']}" stroke-width="1.5" stroke-linecap="round"/>
-  <g fill="{c['ink']}" font-size="21" font-weight="680">
-    <text x="319" y="262">llama.cpp</text>
-    <text x="319" y="302">TensorRT Edge-LLM</text>
-    <text x="296" y="369">Qwen3-ASR</text>
-    <text x="296" y="453">Kokoro</text>
+
+  <g fill="none" stroke="{c['request']}" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M360 255V274M138 274H582"/>
+    <g marker-end="url(#request-head)">
+      <path d="M347 40V101"/>
+      <path d="M347 158V198"/>
+      <path d="M138 274V296"/>
+      <path d="M360 274V296"/>
+      <path d="M582 274V296"/>
+      <path d="M138 334V355"/>
+      <path d="M360 334V355"/>
+      <path d="M582 334V355"/>
+    </g>
   </g>
-  <g fill="{c['secondary']}" font-size="18">
-    <text x="296" y="393">sherpa-onnx · CPU</text>
-    <text x="296" y="477">sherpa-onnx · CPU</text>
-    <text x="557" y="288">{text_stream}</text>
-    <text x="557" y="393">{transcript}</text>
-    <text x="557" y="477">{audio_stream}</text>
+  <g fill="none" stroke="{c['response']}" stroke-width="1.6" stroke-dasharray="4 3"
+     marker-end="url(#response-head)">
+    <path d="M373 101V40"/>
+    <path d="M373 198V158"/>
   </g>
-  <g fill="{c['accent']}" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="22" font-weight="700">
-    <text x="557" y="264">SSE</text>
-    <text x="557" y="369">JSON</text>
-    <text x="557" y="453">PCM16</text>
+  <g class="detail">
+    <text x="335" y="59" text-anchor="end">{label['request']}</text>
+    <text x="385" y="59">{label['response']}</text>
+    <text x="335" y="182" text-anchor="end">{label['typed_request']}</text>
+    <text x="385" y="182">{label['runtime_output']}</text>
   </g>
 </svg>
 '''
