@@ -48,8 +48,27 @@ mkdir -p -- "$runs"
 # A stable inode lets new launchers share a single advisory lock.
 exec 9>"$runs/port-$port.lock"
 flock -n 9 || fail "端口 $port 已由另一个演示启动器管理。"
+# A container left by an earlier run keeps the port until it is stopped. Only
+# stop containers that run this project's server on this exact port.
+stop_stale_container() {
+  local name args
+  while read -r name; do
+    [[ -n $name ]] || continue
+    args=$(docker inspect --format '{{join .Args " "}}' "$name" 2>/dev/null) || continue
+    [[ $args == *kvharbor-server* && $args == *"--port $port"* ]] || continue
+    printf '停止占用端口 %s 的残留容器 %s\n' "$port" "$name"
+    docker stop -t 15 "$name" >/dev/null 2>&1 || true
+  done < <(docker ps --format '{{.Names}}' 2>/dev/null || true)
+}
+if [[ -n $(ss -ltnH "sport = :$port") ]]; then
+  stop_stale_container
+  for _ in {1..20}; do
+    [[ -n $(ss -ltnH "sport = :$port") ]] || break
+    sleep 0.25
+  done
+fi
 listeners=$(ss -ltnH "sport = :$port")
-[[ -z $listeners ]] || fail "端口 $port 已被占用，请选择空闲的 KVHARBOR_DEMO_PORT。"
+[[ -z $listeners ]] || fail "端口 $port 已被非本项目的进程占用，请选择空闲的 KVHARBOR_DEMO_PORT。"
 export KVHARBOR_OUTPUT_DIR
 KVHARBOR_OUTPUT_DIR=$(mktemp -d "$runs/serve.XXXXXX")
 export KVHARBOR_NATIVE_NAME="kvharbor-demo-${KVHARBOR_OUTPUT_DIR##*/}"
