@@ -29,9 +29,10 @@ if(KVHARBOR_SERVING_LLAMA)
   find_library(LLAMA_LIBRARY llama PATHS "${KVHARBOR_LLAMA_BUILD}/bin" NO_DEFAULT_PATH REQUIRED)
   find_library(GGML_LIBRARY ggml PATHS "${KVHARBOR_LLAMA_BUILD}/bin" NO_DEFAULT_PATH REQUIRED)
   find_library(GGML_BASE_LIBRARY ggml-base PATHS "${KVHARBOR_LLAMA_BUILD}/bin" NO_DEFAULT_PATH REQUIRED)
+  find_library(LLAMA_COMMON_LIBRARY llama-common PATHS "${KVHARBOR_LLAMA_BUILD}/bin" NO_DEFAULT_PATH REQUIRED)
   target_sources(kvharbor_serving_core PRIVATE src/llama_runtime.cc)
-  target_include_directories(kvharbor_serving_core PRIVATE "${KVHARBOR_LLAMA_SOURCE}/include" "${KVHARBOR_LLAMA_SOURCE}/ggml/include")
-  target_link_libraries(kvharbor_serving_core PUBLIC "${LLAMA_LIBRARY}" "${GGML_LIBRARY}" "${GGML_BASE_LIBRARY}")
+  target_include_directories(kvharbor_serving_core PRIVATE "${KVHARBOR_LLAMA_SOURCE}/include" "${KVHARBOR_LLAMA_SOURCE}/ggml/include" "${KVHARBOR_LLAMA_SOURCE}/common")
+  target_link_libraries(kvharbor_serving_core PUBLIC "${LLAMA_LIBRARY}" "${GGML_LIBRARY}" "${GGML_BASE_LIBRARY}" "${LLAMA_COMMON_LIBRARY}")
   # libggml-cuda resolves libcuda from NVIDIA Container Toolkit at runtime.
   # The build container does not need a mounted GPU driver.
   target_link_options(kvharbor_serving_core INTERFACE "-Wl,--allow-shlib-undefined")

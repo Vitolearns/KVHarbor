@@ -89,6 +89,7 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
       NumericOption{"--threads", o.runtime.threads, 1, 128},
       NumericOption{"--gpu-layers", o.runtime.gpu_layers, 0, 999},
       NumericOption{"--batch", o.runtime.batch, 1, 4096},
+      NumericOption{"--mtp-draft-tokens", o.runtime.mtp_draft_tokens, 0, 16},
       NumericOption{"--prefill-chunk", o.runtime.prefill_chunk, 1, 4096},
       NumericOption{"--max-output-rows", output_rows, 0, 1},
       NumericOption{"--port", o.port, 1, 65535},
@@ -187,6 +188,9 @@ ValueOrFailure<Options> ParseOptions(int argc, char** argv) {
   if (o.runtime.kv_cache_q8_0 &&
       o.runtime.text_backend != kvharbor::serving::TextBackend::kLlama)
     return InvalidRequest("Q8_0 KV cache requires the llama.cpp backend");
+  if (o.runtime.mtp_draft_tokens &&
+      o.runtime.text_backend != kvharbor::serving::TextBackend::kLlama)
+    return InvalidRequest("MTP requires the llama.cpp backend");
   o.runtime.max_output_rows = static_cast<std::uint32_t>(output_rows);
   return o;
 }

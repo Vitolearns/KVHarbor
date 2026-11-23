@@ -110,7 +110,7 @@ bash scripts/demo/serve.sh --llama
 | `/asr`、`/asr assets/readme/ferry.wav` | 转写上次合成的音频，或指定的单声道 PCM16 WAV。 |
 | `/mix`、`/status` | 同时发起文本、转写和合成请求，或查看各任务的 worker 和队列。 |
 
-演示配置中，llama.cpp 的上下文和单轮输出上限分别为 262,144 和 16,384 个 token，TensorRT 分别为 2,048 和 1,024。日志和 WAV 保存在 `.local/demo/runs/`。
+llama.cpp 演示默认使用 196,608 个 token 的上下文，单轮最多输出 16,384 个 token。MTP 投机解码每步最多提议 3 个 token，需要 GGUF 包含 MTP 预测层。在 24 GB RTX 5090 Laptop GPU 上，开启 MTP 的代码生成测试最低剩余显存为 10 MiB。TensorRT 的上下文和单轮输出上限分别为 2,048 和 1,024 个 token。日志和 WAV 保存在 `.local/demo/runs/`。
 
 ## API
 

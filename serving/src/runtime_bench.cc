@@ -45,6 +45,10 @@ int main(int argc, char** argv) {
       config.reuse_context = true;
       continue;
     }
+    if (arg == "--kv-cache-q8") {
+      config.kv_cache_q8_0 = true;
+      continue;
+    }
     if (arg == "--model-chat-template" || arg == "--edge-no-cuda-graph") {
       if (arg == "--model-chat-template")
         config.model_chat_template = true;
@@ -60,6 +64,7 @@ int main(int argc, char** argv) {
     if (arg == "--context") numeric = &config.context;
     if (arg == "--threads") numeric = &config.threads;
     if (arg == "--gpu-layers") numeric = &config.gpu_layers;
+    if (arg == "--mtp-draft-tokens") numeric = &config.mtp_draft_tokens;
     if (arg == "--repeat") numeric = &repeat;
     if (arg == "--warmup") numeric = &warmup;
     if (numeric == nullptr && arg != "--model" && arg != "--model-id" &&
@@ -111,6 +116,9 @@ int main(int argc, char** argv) {
   }
   if (input.empty() || output.empty() || warmup < 0 || repeat < 1)
     return BenchmarkError("requires --input, --output and valid repeat counts");
+  if (config.mtp_draft_tokens &&
+      config.text_backend != kvharbor::serving::TextBackend::kLlama)
+    return BenchmarkError("MTP requires the llama.cpp backend");
   std::ifstream jobs(input);
   if (!jobs) return BenchmarkError("cannot read workload");
   std::vector<Json> rows;

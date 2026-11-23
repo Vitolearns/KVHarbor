@@ -1,5 +1,6 @@
 #include <ggml-backend.h>
 #include <llama.h>
+#include <speculative.h>
 
 #include <algorithm>
 #include <array>
@@ -36,6 +37,21 @@ struct SamplerDeleter {
 using Model = std::shared_ptr<llama_model>;
 using Context = std::unique_ptr<llama_context, ContextDeleter>;
 using Sampler = std::unique_ptr<llama_sampler, SamplerDeleter>;
+
+struct ContextGroup {
+  Context target;
+  Context draft;
+  common_speculative_ptr speculative;
+};
+using Contexts = std::unique_ptr<ContextGroup>;
+
+struct TokenBatch {
+  llama_batch value;
+  explicit TokenBatch(int capacity) : value(llama_batch_init(capacity, 0, 1)) {}
+  ~TokenBatch() { llama_batch_free(value); }
+  TokenBatch(const TokenBatch&) = delete;
+  TokenBatch& operator=(const TokenBatch&) = delete;
+};
 
 Sampler MakeGreedyChain() {
   auto params = llama_sampler_chain_default_params();
@@ -113,7 +129,7 @@ class LlamaRuntime final : public Runtime {
   // A bound sampler must outlive every context referencing it (reverse
   // destruction).
   Sampler backend_sampler_;
-  Context retained_;
+  Contexts retained_;
   const std::atomic<bool>* active_cancel_ = nullptr;
   std::size_t contexts_created_ = 0;
 
@@ -123,14 +139,19 @@ class LlamaRuntime final : public Runtime {
            self.active_cancel_->load(std::memory_order_relaxed);
   }
 
-  ValueOrFailure<Context> CreateContext() {
+  ValueOrFailure<Contexts> CreateContext() {
     auto params = llama_context_default_params();
     params.n_ctx = config_.context;
     params.n_batch = std::min(config_.batch, config_.context);
     params.n_ubatch = params.n_batch;
     params.n_seq_max = 1;
-    // This adapter requests only the last logits row in each decode call.
-    params.n_outputs_max = config_.max_output_rows;
+    // Verification needs one output row per draft token plus the corrective
+    // row.
+    params.n_outputs_max = config_.mtp_draft_tokens
+                               ? config_.mtp_draft_tokens + 1
+                               : config_.max_output_rows;
+    params.n_outputs_max_per_seq = config_.mtp_draft_tokens + 1;
+    params.n_rs_seq = config_.mtp_draft_tokens;
     if (config_.kv_cache_q8_0) {
       params.type_k = GGML_TYPE_Q8_0;
       params.type_v = GGML_TYPE_Q8_0;
@@ -152,12 +173,30 @@ class LlamaRuntime final : public Runtime {
       params.samplers = &binding;
       params.n_samplers = 1;
     }
-    Context ctx(llama_init_from_model(model_.get(), params));
-    if (!ctx ||
-        llama_n_ctx_seq(ctx.get()) < static_cast<unsigned>(config_.context))
+    auto contexts = std::make_unique<ContextGroup>();
+    contexts->target.reset(llama_init_from_model(model_.get(), params));
+    if (!contexts->target || llama_n_ctx_seq(contexts->target.get()) <
+                                 static_cast<unsigned>(config_.context))
       return BackendError("llama context allocation failed");
+    if (config_.mtp_draft_tokens) {
+      params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+      params.ctx_other = contexts->target.get();
+      params.n_rs_seq = 0;
+      params.n_outputs_max = 1;
+      params.n_outputs_max_per_seq = 1;
+      params.type_k = GGML_TYPE_F16;
+      params.type_v = GGML_TYPE_F16;
+      contexts->draft.reset(llama_init_from_model(model_.get(), params));
+      if (!contexts->draft)
+        return BackendError("MTP draft context allocation failed");
+      if (common_context_can_seq_rm(contexts->target.get()) ==
+              COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+          common_context_can_seq_rm(contexts->draft.get()) ==
+              COMMON_CONTEXT_SEQ_RM_TYPE_FULL)
+        return BackendError("MTP requires partial sequence rollback");
+    }
     ++contexts_created_;
-    return ctx;
+    return contexts;
   }
 
  public:
@@ -179,6 +218,8 @@ class LlamaRuntime final : public Runtime {
         {"threads", config_.threads},
         {"gpu_layers", config_.gpu_layers},
         {"batch", config_.batch},
+        {"speculative", config_.mtp_draft_tokens ? "draft-mtp" : "none"},
+        {"mtp_draft_tokens", config_.mtp_draft_tokens},
         {"sequences_per_context", 1},
         {"prefill_chunk", config_.prefill_chunk
                               ? config_.prefill_chunk
@@ -226,7 +267,7 @@ class LlamaRuntime final : public Runtime {
       ~CancelScope() { slot = nullptr; }
     } scope{active_cancel_};
     active_cancel_ = r.cancelled.get();
-    Context fresh;
+    Contexts fresh;
     auto phase = Clock::now();
     bool reused = config_.reuse_context && static_cast<bool>(retained_);
     if (!reused) {
@@ -234,21 +275,40 @@ class LlamaRuntime final : public Runtime {
       if (const auto* failure = std::get_if<Failure>(&created))
         return FailedRequest(*failure);
       auto& destination = config_.reuse_context ? retained_ : fresh;
-      destination = std::move(std::get<Context>(created));
+      destination = std::move(std::get<Contexts>(created));
     }
-    auto* ctx = config_.reuse_context ? retained_.get() : fresh.get();
+    auto* contexts = config_.reuse_context ? retained_.get() : fresh.get();
+    auto* ctx = contexts->target.get();
     result.timings["context_create_ms"] = reused ? 0.0 : ElapsedMs(phase);
     phase = Clock::now();
     if (reused) {
       // Reset both attention KV and recurrent state; no cross-request prompt
       // cache.
+      contexts->speculative.reset();
       llama_memory_clear(llama_get_memory(ctx), true);
       llama_synchronize(ctx);
+      if (contexts->draft) {
+        llama_memory_clear(llama_get_memory(contexts->draft.get()), true);
+        llama_synchronize(contexts->draft.get());
+      }
+    }
+    if (config_.mtp_draft_tokens) {
+      common_params_speculative params;
+      params.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+      params.draft.n_max = config_.mtp_draft_tokens;
+      params.draft.ctx_tgt = ctx;
+      params.draft.ctx_dft = contexts->draft.get();
+      contexts->speculative.reset(common_speculative_init(params, 1));
+      if (!contexts->speculative) {
+        retained_.reset();
+        return FailedRequest(BackendError("MTP initialization failed"));
+      }
     }
     result.timings["context_reset_ms"] = ElapsedMs(phase);
     result.details = {
         {"context_reused", reused},
         {"contexts_created_by_worker", contexts_created_},
+        {"mtp_draft_tokens", config_.mtp_draft_tokens},
         {"sampling_mode", Name(config_.sampling)},
         {"vocab_size", llama_vocab_n_tokens(vocab_)},
         {"sampling_implementation", config_.sampling == SamplingMode::kDirect
@@ -261,14 +321,9 @@ class LlamaRuntime final : public Runtime {
              Clock::now() >= r.deadline;
     };
     EngineDispatch::Stats dispatch_stats;
-    auto decode = [&](llama_token* input, int count,
-                      EngineDispatch::Phase work) -> std::optional<int> {
+    auto run_engine = [&](EngineDispatch::Phase work,
+                          const auto& on_engine) -> std::optional<int> {
       if (cancelled()) return std::nullopt;
-      auto on_engine = [&] {
-        auto code = llama_decode(ctx, llama_batch_get_one(input, count));
-        llama_synchronize(ctx);
-        return code;
-      };
       int rc;
       if (dispatch_) {
         auto scheduled =
@@ -290,6 +345,31 @@ class LlamaRuntime final : public Runtime {
       return FailedRequest(BackendError("llama_decode failed with status " +
                                         std::to_string(rc)));
     };
+    std::optional<TokenBatch> mtp_batch;
+    if (contexts->speculative) mtp_batch.emplace(llama_n_batch(ctx));
+    auto decode = [&](llama_token* input, int count, EngineDispatch::Phase work,
+                      bool verify = false) -> std::optional<int> {
+      return run_engine(work, [&] {
+        auto batch = llama_batch_get_one(input, count);
+        if (mtp_batch) {
+          common_batch_clear(mtp_batch->value);
+          const auto pos =
+              llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
+          for (int i = 0; i < count; ++i)
+            common_batch_add(mtp_batch->value, input[i], pos + i, {0},
+                             verify || i + 1 == count);
+          batch = mtp_batch->value;
+        }
+        auto code = llama_decode(ctx, batch);
+        llama_synchronize(ctx);
+        if (code == 0 && contexts->speculative) {
+          if (!common_speculative_process(contexts->speculative.get(), batch))
+            code = -1;
+          llama_synchronize(contexts->draft.get());
+        }
+        return code;
+      });
+    };
     phase = Clock::now();
     const std::size_t batch = llama_n_batch(ctx);
     const std::size_t prefill_chunk =
@@ -309,6 +389,8 @@ class LlamaRuntime final : public Runtime {
       offset += count;
     }
     result.timings["prefill_ms"] = ElapsedMs(phase);
+    if (contexts->speculative)
+      common_speculative_begin(contexts->speculative.get(), 0, tokens);
     Sampler sampler;
     if (config_.sampling == SamplingMode::kLegacy)
       sampler.reset(llama_sampler_init_greedy());
@@ -327,63 +409,153 @@ class LlamaRuntime final : public Runtime {
     std::size_t sample_calls = 0, backend_samples = 0;
     std::vector<llama_token> generated;
     std::string pending;
-    double sampling_ms = 0.0, decode_ms = 0.0;
-    for (int i = 0; i < max_tokens; ++i) {
-      if (cancelled()) {
-        result.outcome = "cancelled";
-        break;
-      }
-      phase = Clock::now();
+    double sampling_ms = 0.0, decode_ms = 0.0, draft_ms = 0.0;
+    std::size_t drafted = 0, accepted_drafts = 0, verification_batches = 0;
+    auto sample = [&](int row) -> ValueOrFailure<llama_token> {
+      const auto start = Clock::now();
       llama_token token;
       if (config_.sampling == SamplingMode::kDirect) {
-        const auto* logits = llama_get_logits_ith(ctx, -1);
+        const auto* logits = llama_get_logits_ith(ctx, row);
         if (!logits)
-          return FailedRequest(
-              BackendError("missing logits for direct greedy sampling"));
+          return BackendError("missing logits for direct greedy sampling");
         const auto selected =
             GreedyArgmax({logits, static_cast<std::size_t>(n_vocab)});
-        if (!selected)
-          return FailedRequest(BackendError("invalid greedy logits span"));
+        if (!selected) return BackendError("invalid greedy logits span");
         token = *selected;
       } else if (config_.sampling == SamplingMode::kBackend) {
-        token = llama_get_sampled_token_ith(ctx, -1);
+        token = llama_get_sampled_token_ith(ctx, row);
         if (token == LLAMA_TOKEN_NULL)
-          return FailedRequest(BackendError(
+          return BackendError(
               "backend sampling unavailable; explicit mode never silently "
-              "falls back"));
+              "falls back");
         llama_sampler_accept(backend_sampler_.get(), token);
         ++backend_samples;
       } else
-        token = llama_sampler_sample(sampler.get(), ctx, -1);
+        token = llama_sampler_sample(sampler.get(), ctx, row);
       ++sample_calls;
-      sampling_ms += ElapsedMs(phase);
-      if (llama_vocab_is_eog(vocab_, token)) break;
+      sampling_ms += ElapsedMs(start);
+      return token;
+    };
+    auto append = [&](llama_token token) -> ValueOrFailure<bool> {
+      if (llama_vocab_is_eog(vocab_, token)) return false;
       generated.push_back(token);
       auto piece = RenderToken(vocab_, token);
-      if (const auto* failure = std::get_if<Failure>(&piece))
-        return FailedRequest(*failure);
+      if (const auto* failure = std::get_if<Failure>(&piece)) return *failure;
       pending += std::get<std::string>(piece);
       auto output = TakeUtf8(pending);
-      if (const auto* failure = std::get_if<Failure>(&output))
-        return FailedRequest(*failure);
+      if (const auto* failure = std::get_if<Failure>(&output)) return *failure;
       const auto& text = std::get<std::string>(output);
       if (!text.empty()) {
         if (!result.timings.contains("native_ttft_ms"))
           result.timings["native_ttft_ms"] = ElapsedMs(begin);
         if (!emit(text)) {
           result.outcome = "cancelled";
+          return false;
+        }
+      }
+      return generated.size() < static_cast<std::size_t>(max_tokens);
+    };
+    auto selected = sample(-1);
+    if (const auto* failure = std::get_if<Failure>(&selected))
+      return FailedRequest(*failure);
+    std::vector<llama_token> accepted{std::get<llama_token>(selected)};
+    std::vector<llama_token> history = tokens;
+    llama_pos n_past = tokens.size();
+    bool done = false;
+    while (!done) {
+      for (auto token : accepted) {
+        if (cancelled()) {
+          result.outcome = "cancelled";
+          done = true;
+          break;
+        }
+        auto appended = append(token);
+        if (const auto* failure = std::get_if<Failure>(&appended))
+          return FailedRequest(*failure);
+        if (!std::get<bool>(appended)) {
+          done = true;
           break;
         }
       }
-      if (i + 1 == max_tokens) break;
-      phase = Clock::now();
-      const auto status = decode(&token, 1, EngineDispatch::Phase::kDecode);
+      if (done) break;
+      auto last = accepted.back();
+      const auto step_begin = Clock::now();
+      if (!contexts->speculative) {
+        const auto status = decode(&last, 1, EngineDispatch::Phase::kDecode);
+        if (!status) {
+          result.outcome = "cancelled";
+          break;
+        }
+        if (*status != 0) return decode_failure(*status);
+        decode_ms += ElapsedMs(step_begin);
+        selected = sample(-1);
+        if (const auto* failure = std::get_if<Failure>(&selected))
+          return FailedRequest(*failure);
+        accepted = {std::get<llama_token>(selected)};
+        continue;
+      }
+
+      std::vector<llama_token> draft;
+      auto* spec = contexts->speculative.get();
+      auto* draft_ctx = contexts->draft.get();
+      const int remaining = max_tokens - static_cast<int>(generated.size());
+      // The upstream MTP engine can consume a full draft before applying a
+      // per-request limit. Leave room for that draft and the corrective token.
+      if (remaining > config_.mtp_draft_tokens) {
+        common_speculative_get_draft_params(spec, 0) = {
+            true, config_.mtp_draft_tokens, n_past, last, &history, &draft};
+        const auto status_draft =
+            run_engine(EngineDispatch::Phase::kDecode, [&] {
+              common_speculative_draft(spec);
+              llama_synchronize(draft_ctx);
+              return 0;
+            });
+        if (!status_draft) {
+          result.outcome = "cancelled";
+          break;
+        }
+        draft_ms += ElapsedMs(step_begin);
+        drafted += draft.size();
+        // Catch-up starts from the verified prefix, excluding draft-only KV.
+        if (!llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, n_past, -1)) {
+          retained_.reset();
+          return FailedRequest(BackendError("MTP draft rollback failed"));
+        }
+      }
+      std::vector<llama_token> verification{last};
+      verification.insert(verification.end(), draft.begin(), draft.end());
+      const auto status = decode(verification.data(), verification.size(),
+                                 EngineDispatch::Phase::kDecode, true);
       if (!status) {
         result.outcome = "cancelled";
         break;
       }
       if (*status != 0) return decode_failure(*status);
-      decode_ms += ElapsedMs(phase);
+      decode_ms += ElapsedMs(step_begin);
+      if (!draft.empty()) ++verification_batches;
+      accepted.clear();
+      for (std::size_t row = 0; row <= draft.size(); ++row) {
+        selected = sample(row);
+        if (const auto* failure = std::get_if<Failure>(&selected))
+          return FailedRequest(*failure);
+        const auto token = std::get<llama_token>(selected);
+        accepted.push_back(token);
+        if (row == draft.size() || token != draft[row] ||
+            llama_vocab_is_eog(vocab_, token))
+          break;
+      }
+      const auto matched = accepted.size() - 1;
+      accepted_drafts += matched;
+      if (!draft.empty()) common_speculative_accept(spec, 0, matched);
+      history.push_back(last);
+      history.insert(history.end(), accepted.begin(), accepted.end() - 1);
+      n_past += accepted.size();
+      // n_rs_seq retains enough recurrent snapshots for every rejected suffix.
+      if (!llama_memory_seq_rm(llama_get_memory(ctx), 0, n_past, -1) ||
+          !llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, n_past, -1)) {
+        retained_.reset();
+        return FailedRequest(BackendError("MTP verification rollback failed"));
+      }
     }
     if (result.outcome == "completed") {
       auto output = TakeUtf8(pending, true);
@@ -398,6 +570,12 @@ class LlamaRuntime final : public Runtime {
     result.details["token_ids"] = generated;
     result.details["sampling_calls"] = sample_calls;
     result.details["backend_sampled_tokens"] = backend_samples;
+    if (config_.mtp_draft_tokens) {
+      result.details["draft_tokens"] = drafted;
+      result.details["accepted_draft_tokens"] = accepted_drafts;
+      result.details["verification_batches"] = verification_batches;
+      result.timings["mtp_draft_ms"] = draft_ms;
+    }
     result.details["cpu_candidate_rows_constructed"] =
         (config_.sampling == SamplingMode::kLegacy ||
          config_.sampling == SamplingMode::kChain)
@@ -439,16 +617,24 @@ ValueOrFailure<TextWorkerBuilder> LoadLlamaBackend(
     return InvalidRequest("invalid native runtime configuration");
   if (config.prefill_chunk < 0 || config.prefill_chunk > config.batch)
     return InvalidRequest("prefill chunk cannot exceed batch size");
+  if (config.mtp_draft_tokens < 0 || config.mtp_draft_tokens > 16 ||
+      (config.mtp_draft_tokens && (config.sampling != SamplingMode::kDirect ||
+                                   config.batch <= config.mtp_draft_tokens)))
+    return InvalidRequest(
+        "MTP requires direct sampling, 1-16 draft tokens and a larger batch");
   static std::once_flag backend;
   std::call_once(backend, [] { ggml_backend_load_all(); });
   auto params = llama_model_default_params();
   params.n_gpu_layers = config.gpu_layers;
   params.load_mode = LLAMA_LOAD_MODE_MMAP;
+  params.load_mtp = config.mtp_draft_tokens > 0;
   Model model(llama_model_load_from_file(config.model.c_str(), params),
               ModelDeleter{});
   if (!model || !llama_model_has_decoder(model.get()) ||
       llama_model_has_encoder(model.get()))
     return BackendError("failed to load decoder-only GGUF");
+  if (config.mtp_draft_tokens && llama_model_n_layer_nextn(model.get()) == 0)
+    return BackendError("GGUF has no MTP prediction layers");
   std::shared_ptr<EngineDispatch> dispatch;
   if (config.engine_schedule != EngineSchedule::kOff)
     dispatch = std::make_shared<EngineDispatch>(config.engine_schedule ==

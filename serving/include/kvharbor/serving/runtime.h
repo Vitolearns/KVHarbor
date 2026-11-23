@@ -132,6 +132,7 @@ struct RuntimeConfig {
   int threads = 4;
   int gpu_layers = 99;
   int batch = 512;
+  int mtp_draft_tokens = 0;
   std::uint32_t max_output_rows = 0;
   bool reuse_context = false;
   bool kv_cache_q8_0 = false;

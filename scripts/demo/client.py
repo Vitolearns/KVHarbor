@@ -161,6 +161,8 @@ def load_service(url, requested):
     for task in ("llm", "asr", "tts"):
         print(f"{task.upper()}  {runtimes[task]['model']}  {runtimes[task]['backend']}")
     llm = runtimes["llm"]
+    if drafts := llm.get("mtp_draft_tokens", 0):
+        print(f"MTP  每轮最多提议 {drafts} 个 token")
     limit = health.get("max_output_tokens", 0)
     budget = requested or limit or 384
     if limit:
