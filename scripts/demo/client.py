@@ -99,7 +99,7 @@ def synthesize(url, text, *, announce=True):
     folder = Path(tempfile.mkdtemp(prefix="voice.", dir=RUNS))
     wav_path = folder / "speech.wav"
     # These are the Mandarin and English voices used by the repo's audio fixtures.
-    voice = 45 if re.search(r"[\u3400-\u9fff]", text) else 2
+    voice = 47 if re.search(r"[\u3400-\u9fff]", text) else 2
     if announce:
         print(f"TTS 输入> {text}")
     result = tts(url, text, voice, wav_path)
