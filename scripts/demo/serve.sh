@@ -88,7 +88,7 @@ start_service() {
   if [[ $selected == llama ]]; then
     backend=llama.cpp
     model=Qwen3.8-27B-Q4_K_M
-    args=(--context 196608 --max-output-tokens 16384 --batch 512 --threads 4 --gpu-layers 99
+    args=(--context 155648 --max-output-tokens 16384 --batch 512 --threads 4 --gpu-layers 99
           --reuse-context --sampling direct --max-output-rows 1 --kv-cache-q8 --mtp-draft-tokens 3)
   else
     backend=tensorrt-edge-llm

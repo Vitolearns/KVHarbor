@@ -116,10 +116,10 @@ to use a free port other than 18082. Stop the launcher with Ctrl+C.
 | `/asr`, `/asr assets/readme/ferry.wav` | Transcribe the last synthesized WAV or a supplied mono PCM16 WAV. |
 | `/mix`, `/status` | Submit text, transcription and synthesis concurrently or inspect the worker queues. |
 
-The llama.cpp demo uses a 196,608-token context, a 16,384-token output limit,
+The llama.cpp demo uses a 155,648-token context, a 16,384-token output limit,
 and MTP speculative decoding with up to three draft tokens per step. The GGUF
-must include MTP prediction layers. A code-generation test on a 24 GB
-RTX 5090 Laptop GPU reported a minimum of 10 MiB free VRAM with MTP enabled.
+must include MTP prediction layers. A 128-token code-generation test on a 24 GB
+RTX 5090 Laptop GPU reported a minimum of 1,042 MiB free VRAM with MTP enabled.
 TensorRT uses a 2,048-token context and a 1,024-token output limit. Logs and WAVs
 are saved under `.local/demo/runs/`.
 
